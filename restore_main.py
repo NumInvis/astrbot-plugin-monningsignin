@@ -11,7 +11,7 @@ code_segments = []
 
 # 第1段：文件头和导入
 code_segments.append('''"""
-莫宁宁的币 - 经济系统插件 v2.0.0
+莫宁宁的币 - 经济系统插件 v1.0
 作者：莫宁
 功能：签到、银行、商店、股票、工作、结社、成就、好感度等经济系统
 """
@@ -223,7 +223,7 @@ class DBManager:
 
 
 # ============== 主插件类 ==============
-@register("astrbot_plugin_signin", "莫宁", "莫宁宁的币 - 经济系统插件", "2.0.0", "https://github.com/your-repo")
+@register("astrbot_plugin_signin", "莫宁", "莫宁宁的币 - 经济系统插件", "1.0", "https://github.com/your-repo")
 class EconomyPlugin(Star):
     """经济系统主插件类"""
     
@@ -250,7 +250,7 @@ class EconomyPlugin(Star):
         self.db_manager = DatabaseManager(self.db_path)
         
         self._initialized = False
-        logger.info("【经济系统】插件加载中 v2.0.0")
+        logger.info("【经济系统】插件加载中 v1.0")
     
     async def _ensure_db(self):
         """确保数据库初始化"""

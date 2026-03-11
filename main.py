@@ -1,5 +1,5 @@
 """
-莫宁宁的币 - 专业级经济系统插件 v2.0.0
+莫宁宁的币 - 专业级经济系统插件 v1.0
 重构版本：模块化、高性能、易维护
 """
 import os
@@ -293,7 +293,7 @@ class DBManager:
         self._ready = True
 
 # ============== 主插件类 ==============
-@register("astrbot_plugin_signin", "鬼神莫能窥", "莫宁宁的币", "2.0.0")
+@register("astrbot_plugin_signin", "鬼神莫能窥", "莫宁宁的币", "1.0")
 class EconomyPlugin(Star):
     """经济系统主插件"""
     
@@ -319,7 +319,7 @@ class EconomyPlugin(Star):
         self.db_manager = DatabaseManager(self.db_path)
         
         self._initialized = False
-        logger.info("【经济系统】插件加载中 v2.0.0")
+        logger.info("【经济系统】插件加载中 v1.0")
     
     async def _ensure_db(self):
         """确保数据库初始化"""
