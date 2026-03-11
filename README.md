@@ -138,6 +138,7 @@ git clone https://github.com/MTMASTER-star/astrbot-checkin-plugin-monningsignin.
 
 ## 📞 联系方式
 
-- GitHub: [@MTMASTER-star](https://github.com/MTMASTER-star)
-- 项目地址: https://github.com/MTMASTER-star/astrbot-checkin-plugin-monningsignin
+- GitHub: [@NumInvis](https://github.com/NumInvis)
+- 项目地址: https://github.com/NumInvis/astrbot-checkin-plugin-monningsignin
+- B站: [鬼神莫能窥](https://space.bilibili.com/274736623)
 
