@@ -2960,9 +2960,15 @@ class EconomyPlugin(Star):
         )
     
     async def _broadcast_announcement(self, event, content: str) -> dict:
-        """广播公告到所有群"""
+        """广播公告到白名单群"""
         success_count = 0
         failed_count = 0
+        
+        # 获取白名单
+        whitelist = CONFIG.ANNOUNCEMENT_WHITELIST
+        if not whitelist:
+            logger.warning("公告白名单为空，无法广播")
+            return {"success": 0, "failed": 0, "skipped": 0}
         
         try:
             # 使用 context 获取平台管理器
@@ -2977,61 +2983,60 @@ class EconomyPlugin(Star):
                             adapter = platform
                             if hasattr(adapter, 'bot'):
                                 bot = adapter.bot
-                                # 获取群列表
-                                groups = await bot.get_group_list()
                                 
-                                for group in groups:
+                                # 只发送到白名单中的群
+                                for group_id_str in whitelist:
                                     try:
-                                        group_id = group.get('group_id')
-                                        if group_id:
-                                            # 构造公告消息
-                                            announcement_msg = f"📢【系统公告】📢\n═══════════════════\n{content}\n═══════════════════\n⏰ 发布时间：{datetime.now().strftime('%Y-%m-%d %H:%M')}"
-                                            
-                                            # 发送群消息
-                                            await bot.api.call_action(
-                                                "send_group_msg",
-                                                group_id=int(group_id),
-                                                message=[{"type": "text", "data": {"text": announcement_msg}}]
-                                            )
-                                            success_count += 1
+                                        group_id = int(group_id_str)
+                                        # 构造公告消息
+                                        announcement_msg = f"📢【系统公告】📢\n═══════════════════\n{content}\n═══════════════════\n⏰ 发布时间：{datetime.now().strftime('%Y-%m-%d %H:%M')}"
+                                        
+                                        # 发送群消息
+                                        await bot.api.call_action(
+                                            "send_group_msg",
+                                            group_id=group_id,
+                                            message=[{"type": "text", "data": {"text": announcement_msg}}]
+                                        )
+                                        success_count += 1
+                                        logger.info(f"公告已发送到群 {group_id}")
                                     except Exception as e:
-                                        logger.warning(f"广播到群 {group.get('group_id')} 失败: {e}")
+                                        logger.warning(f"广播到群 {group_id_str} 失败: {e}")
                                         failed_count += 1
                         except Exception as e:
-                            logger.warning(f"获取平台群列表失败: {e}")
+                            logger.warning(f"获取平台适配器失败: {e}")
                             continue
                 except Exception as e:
                     logger.warning(f"获取平台实例失败: {e}")
-                    failed_count = 1
+                    failed_count = len(whitelist)
             else:
                 # 尝试使用 event.bot
                 if hasattr(event, 'bot') and event.bot:
                     try:
-                        groups = await event.bot.get_group_list()
-                        
-                        for group in groups:
+                        # 只发送到白名单中的群
+                        for group_id_str in whitelist:
                             try:
-                                group_id = group.get('group_id')
-                                if group_id:
-                                    announcement_msg = f"📢【系统公告】📢\n═══════════════════\n{content}\n═══════════════════\n⏰ 发布时间：{datetime.now().strftime('%Y-%m-%d %H:%M')}"
-                                    
-                                    await event.bot.api.call_action(
-                                        "send_group_msg",
-                                        group_id=int(group_id),
-                                        message=[{"type": "text", "data": {"text": announcement_msg}}]
-                                    )
-                                    success_count += 1
+                                group_id = int(group_id_str)
+                                announcement_msg = f"📢【系统公告】📢\n═══════════════════\n{content}\n═══════════════════\n⏰ 发布时间：{datetime.now().strftime('%Y-%m-%d %H:%M')}"
+                                
+                                await event.bot.api.call_action(
+                                    "send_group_msg",
+                                    group_id=group_id,
+                                    message=[{"type": "text", "data": {"text": announcement_msg}}]
+                                )
+                                success_count += 1
+                                logger.info(f"公告已发送到群 {group_id}")
                             except Exception as e:
-                                logger.warning(f"广播到群 {group.get('group_id')} 失败: {e}")
+                                logger.warning(f"广播到群 {group_id_str} 失败: {e}")
                                 failed_count += 1
                     except Exception as e:
-                        logger.warning(f"获取群列表失败: {e}")
-                        failed_count = 1
+                        logger.warning(f"使用 event.bot 广播失败: {e}")
+                        failed_count = len(whitelist)
                 else:
-                    failed_count = 1
+                    logger.warning("无法获取 bot 实例，无法广播公告")
+                    failed_count = len(whitelist)
         except Exception as e:
             logger.error(f"广播公告时出错: {e}")
-            failed_count = 1
+            failed_count = len(whitelist)
         
         return {"success": success_count, "failed": failed_count}
     
@@ -3083,3 +3088,86 @@ class EconomyPlugin(Star):
         lines.append("💡 使用 /公告 查看最新公告")
         
         yield event.plain_result("\n".join(lines))
+    
+    @filter.command("公告白名单")
+    async def cmd_announcement_whitelist(self, event: AstrMessageEvent):
+        """管理公告推送白名单 - /公告白名单 <add/remove/list> [群号]"""
+        user_id = str(event.get_sender_id())
+        
+        # 检查是否为管理员
+        if user_id not in CONFIG.ADMIN_IDS:
+            yield event.plain_result("⚠️ 权限不足！此命令仅管理员可用")
+            return
+        
+        # 获取命令参数
+        msg_text = event.message_str
+        args = msg_text.split()
+        
+        if len(args) < 2:
+            # 显示当前白名单
+            whitelist = CONFIG.ANNOUNCEMENT_WHITELIST
+            if not whitelist:
+                yield event.plain_result("📋 当前公告白名单为空\n💡 用法：/公告白名单 add 群号\n   /公告白名单 remove 群号\n   /公告白名单 list")
+                return
+            
+            lines = ["📋【公告推送白名单】", "═══════════════════"]
+            for i, group_id in enumerate(whitelist, 1):
+                lines.append(f"{i}. {group_id}")
+            lines.append("═══════════════════")
+            lines.append(f"📊 共 {len(whitelist)} 个群")
+            lines.append("💡 用法：/公告白名单 add 群号")
+            lines.append("   /公告白名单 remove 群号")
+            lines.append("   /公告白名单 list")
+            yield event.plain_result("\n".join(lines))
+            return
+        
+        action = args[1].lower()
+        
+        if action == "list":
+            # 列出白名单
+            whitelist = CONFIG.ANNOUNCEMENT_WHITELIST
+            if not whitelist:
+                yield event.plain_result("📋 当前公告白名单为空")
+                return
+            
+            lines = ["📋【公告推送白名单】", "═══════════════════"]
+            for i, group_id in enumerate(whitelist, 1):
+                lines.append(f"{i}. {group_id}")
+            lines.append("═══════════════════")
+            lines.append(f"📊 共 {len(whitelist)} 个群")
+            yield event.plain_result("\n".join(lines))
+        
+        elif action == "add":
+            # 添加群到白名单
+            if len(args) < 3:
+                yield event.plain_result("📢 用法：/公告白名单 add 群号")
+                return
+            
+            group_id = args[2].strip()
+            if not group_id.isdigit():
+                yield event.plain_result("❌ 群号必须是数字！")
+                return
+            
+            if group_id in CONFIG.ANNOUNCEMENT_WHITELIST:
+                yield event.plain_result(f"📢 群 {group_id} 已在白名单中")
+                return
+            
+            CONFIG.ANNOUNCEMENT_WHITELIST.append(group_id)
+            yield event.plain_result(f"✅ 已添加群 {group_id} 到白名单\n📊 当前白名单共 {len(CONFIG.ANNOUNCEMENT_WHITELIST)} 个群")
+        
+        elif action == "remove":
+            # 从白名单移除群
+            if len(args) < 3:
+                yield event.plain_result("📢 用法：/公告白名单 remove 群号")
+                return
+            
+            group_id = args[2].strip()
+            if group_id not in CONFIG.ANNOUNCEMENT_WHITELIST:
+                yield event.plain_result(f"📢 群 {group_id} 不在白名单中")
+                return
+            
+            CONFIG.ANNOUNCEMENT_WHITELIST.remove(group_id)
+            yield event.plain_result(f"✅ 已从白名单移除群 {group_id}\n📊 当前白名单共 {len(CONFIG.ANNOUNCEMENT_WHITELIST)} 个群")
+        
+        else:
+            yield event.plain_result("❌ 未知操作！\n💡 用法：/公告白名单 add 群号\n   /公告白名单 remove 群号\n   /公告白名单 list")

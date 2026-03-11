@@ -144,6 +144,9 @@ class Config:
     # 系统密码
     SEASON_PASSWORD = "moningningning"
     
+    # 公告推送白名单（群号列表）
+    ANNOUNCEMENT_WHITELIST = ["1047215229", "468563035", "1078585038"]
+    
     # 签到
     BASE_SIGNIN_REWARD = 10
     
