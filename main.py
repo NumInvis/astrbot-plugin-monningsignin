@@ -40,6 +40,7 @@ from achievement_service import AchievementService
 from charity_service import CharityService
 from favor_system import FavorSystem
 from db_manager import DatabaseManager
+from announcement_service import AnnouncementService
 from utils import today_str, now_str, mask_id, format_num
 
 # ============== 数据库管理器 ==============
@@ -324,6 +325,9 @@ class EconomyPlugin(Star):
         self.favor_system = FavorSystem(self.db_path)
         self.db_manager = DatabaseManager(self.db_path)
         
+        # 初始化公告服务
+        self.announcement_service = AnnouncementService(self.db_path)
+        
         self._initialized = False
         logger.info("【经济系统】插件加载中 v2.0.0")
     
@@ -333,6 +337,8 @@ class EconomyPlugin(Star):
             await self.db.init()
             # 授予赛季成就
             await self.achievement_service.grant_season_achievements()
+            # 初始化公告表
+            await self.announcement_service.init_table()
             self._initialized = True
     
     # ============== 用户基础功能 ==============
@@ -1509,7 +1515,7 @@ class EconomyPlugin(Star):
             
             for _, achievement, obtain_time in sorted_achievements:
                 lines.append(f"{achievement['emoji']} {achievement['name']}")
-                lines.append(f"   📝 {achievement["desc"]}")
+                lines.append(f"   📝 {achievement['desc']}")
                 # 显示成就加成
                 rarity = achievement.get("rarity", "blue")
                 try:
@@ -1620,8 +1626,8 @@ class EconomyPlugin(Star):
             count = await self.achievement_service.grant_achievement_to_all(achievement_id)
             yield event.plain_result(
                 f"⛔ 成功给 {count} 个用户授予成就！\n"
-                f"🏆 {achievement["emoji"]} {achievement['name']}\n"
-                f"📝 {achievement["desc"]}"
+                f"🏆 {achievement['emoji']} {achievement['name']}\n"
+                f"📝 {achievement['desc']}"
             )
         else:
             # 给特定用户授予成就
@@ -1630,8 +1636,8 @@ class EconomyPlugin(Star):
             if success:
                 yield event.plain_result(
                     f"⛔ 成功给用户 {target} 授予成就！\n"
-                    f"🏆 {achievement["emoji"]} {achievement['name']}\n"
-                    f"📝 {achievement["desc"]}"
+                    f"🏆 {achievement['emoji']} {achievement['name']}\n"
+                    f"📝 {achievement['desc']}"
                 )
             else:
                 yield event.plain_result(f"🎁 用户 {target} 已经拥有该成就。")
@@ -2042,7 +2048,7 @@ class EconomyPlugin(Star):
             limit = f"（每日限购{info['daily_limit']}次）" if info['daily_limit'] > 0 else "（永久有效）"
             lines.append(f"📦 {name}")
             lines.append(f"💰 价格：{format_num(info['price'])}星声{limit}")
-            lines.append(f"📝 {info["desc"]}")
+            lines.append(f"📝 {info['desc']}")
             lines.append("")
         
         lines.append(f"⚠️ 注意：每日最多占卜{CONFIG.LOTTERY_LIMIT}次")
@@ -2902,4 +2908,136 @@ class EconomyPlugin(Star):
         lines.append("")
         lines.append(f"? 更换冷却：{result['cooldown']}小时")
 
+        yield event.plain_result("\n".join(lines))
+
+    # ============== 公告功能 ==============
+    @filter.permission_type(filter.PermissionType.ADMIN)
+    @filter.command("发布公告")
+    async def cmd_publish_announcement(self, event: AstrMessageEvent, *, content: str = ""):
+        """发布公告到所有群 - /发布公告 <内容>"""
+        await self._ensure_db()
+        
+        user_id = str(event.get_sender_id())
+        sender_name = self._get_sender_name(event)
+        
+        # 获取公告内容
+        msg_text = event.get_message_text()
+        args = msg_text.split(maxsplit=1)
+        if len(args) < 2:
+            yield event.plain_result("? 请输入公告内容：/发布公告 <内容>")
+            return
+        
+        content = args[1].strip()
+        if not content:
+            yield event.plain_result("? 公告内容不能为空！")
+            return
+        
+        # 发布公告到数据库
+        title = "系统公告"
+        result = await self.announcement_service.publish_announcement(
+            title=title,
+            content=content,
+            author_id=user_id,
+            author_name=sender_name
+        )
+        
+        if not result["success"]:
+            yield event.plain_result(f"? 发布公告失败：{result.get('message', '未知错误')}")
+            return
+        
+        # 广播到所有群
+        broadcast_result = await self._broadcast_announcement(event, content)
+        
+        yield event.plain_result(
+            f"? 公告发布成功！\n"
+            f"内容：{content[:50]}{'...' if len(content) > 50 else ''}\n"
+            f"广播结果：成功 {broadcast_result['success']} 个群，失败 {broadcast_result['failed']} 个群"
+        )
+    
+    async def _broadcast_announcement(self, event, content: str) -> dict:
+        """广播公告到所有群"""
+        success_count = 0
+        failed_count = 0
+        
+        try:
+            # 获取所有群列表
+            if hasattr(event, 'bot') and event.bot:
+                try:
+                    groups = await event.bot.get_group_list()
+                    
+                    for group in groups:
+                        try:
+                            group_id = group.get('group_id')
+                            if group_id:
+                                # 构造公告消息
+                                announcement_msg = f"?【系统公告】?\n═══════════════════\n{content}\n═══════════════════\n? 发布时间：{datetime.now().strftime('%Y-%m-%d %H:%M')}"
+                                
+                                # 发送群消息
+                                await event.bot.api.call_action(
+                                    "send_group_msg",
+                                    group_id=int(group_id),
+                                    message=[{"type": "text", "data": {"text": announcement_msg}}]
+                                )
+                                success_count += 1
+                        except Exception as e:
+                            logger.warning(f"广播到群 {group.get('group_id')} 失败: {e}")
+                            failed_count += 1
+                except Exception as e:
+                    logger.warning(f"获取群列表失败: {e}")
+                    failed_count = 1
+            else:
+                failed_count = 1
+        except Exception as e:
+            logger.error(f"广播公告时出错: {e}")
+            failed_count = 1
+        
+        return {"success": success_count, "failed": failed_count}
+    
+    @filter.command("公告")
+    async def cmd_announcement(self, event: AstrMessageEvent):
+        """查看最新公告 - /公告"""
+        await self._ensure_db()
+        
+        # 获取最新公告
+        announcement = await self.announcement_service.get_latest_announcement()
+        
+        if not announcement:
+            yield event.plain_result("? 暂无公告")
+            return
+        
+        lines = [
+            f"?【{announcement['title']}】?",
+            "═══════════════════",
+            f"{announcement['content']}",
+            "═══════════════════",
+            f"? 发布者：{announcement['author_name']}",
+            f"? 发布时间：{announcement['publish_time']}"
+        ]
+        
+        yield event.plain_result("\n".join(lines))
+    
+    @filter.command("公告列表")
+    async def cmd_announcement_list(self, event: AstrMessageEvent):
+        """查看历史公告列表 - /公告列表"""
+        await self._ensure_db()
+        
+        # 获取最近10条公告
+        announcements = await self.announcement_service.get_announcements(limit=10)
+        
+        if not announcements:
+            yield event.plain_result("? 暂无公告")
+            return
+        
+        lines = ["?【历史公告列表】?", "═══════════════════"]
+        
+        for i, ann in enumerate(announcements, 1):
+            content_preview = ann['content'][:30] + "..." if len(ann['content']) > 30 else ann['content']
+            lines.append(f"{i}. {ann['title']}")
+            lines.append(f"   内容：{content_preview}")
+            lines.append(f"   时间：{ann['publish_time']}")
+            lines.append("")
+        
+        lines.append(f"? 共 {len(announcements)} 条公告")
+        lines.append("? 使用 /公告 查看最新公告")
+        
         yield event.plain_result("\n".join(lines))
