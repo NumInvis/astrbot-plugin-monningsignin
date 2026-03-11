@@ -1,0 +1,25 @@
+{
+  "name": "莫宁宁的币",
+  "version": "1.0",
+  "description": "一个功能丰富的 AstrBot 经济系统插件，包含签到、银行、商店、股票、工作、结社、成就、好感度等多个子系统",
+  "author": "NumInvis",
+  "license": "MIT",
+  "homepage": "https://github.com/NumInvis/astrbot-checkin-plugin-monningsignin",
+  "repository": "https://github.com/NumInvis/astrbot-checkin-plugin-monningsignin.git",
+  "keywords": [
+    "经济系统",
+    "签到",
+    "银行",
+    "股票",
+    "游戏",
+    "娱乐"
+  ],
+  "category": "entertainment",
+  "min_ast_version": "3.0.0",
+  "dependencies": [
+    "aiosqlite>=0.19.0"
+  ],
+  "main": "main.py",
+  "icon": "💰",
+  "readme": "README.md"
+}
