@@ -141,4 +141,3 @@ git clone https://github.com/MTMASTER-star/astrbot-checkin-plugin-monningsignin.
 - GitHub: [@MTMASTER-star](https://github.com/MTMASTER-star)
 - 项目地址: https://github.com/MTMASTER-star/astrbot-checkin-plugin-monningsignin
 
----
