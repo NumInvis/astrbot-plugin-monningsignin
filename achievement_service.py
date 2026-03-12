@@ -45,6 +45,10 @@ class AchievementService:
     
     async def check_achievements(self, user_id: str, event_type: str, data: dict = None) -> list:
         """检查并授予成就，返回新获得的成就"""
+        # 防御性编程：确保data不为None
+        if data is None:
+            data = {}
+        
         new_achievements = []
         
         async with aiosqlite.connect(self.db_path) as db:

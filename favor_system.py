@@ -23,7 +23,7 @@ class FavorSystem:
         """获取用户好感度信息"""
         async with aiosqlite.connect(self.db_path) as db:
             cursor = await db.execute(
-                "SELECT favor_value FROM users WHERE user_id = ?",
+                "SELECT COALESCE(favor_value, 0) FROM users WHERE user_id = ?",
                 (user_id,)
             )
             row = await cursor.fetchone()
@@ -69,10 +69,10 @@ class FavorSystem:
         return ranking
     
     async def add_favor_value(self, user_id: str, amount: int) -> bool:
-        """增加用户好感值"""
+        """增加用户好感值（使用COALESCE处理NULL）"""
         async with aiosqlite.connect(self.db_path) as db:
             await db.execute(
-                "UPDATE users SET favor_value = favor_value + ? WHERE user_id = ?",
+                "UPDATE users SET favor_value = COALESCE(favor_value, 0) + ? WHERE user_id = ?",
                 (amount, user_id)
             )
             await db.commit()

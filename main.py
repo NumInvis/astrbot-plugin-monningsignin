@@ -186,29 +186,39 @@ class EconomyPlugin(Star):
         return cash + bank + stock, cash, bank, stock
     
     async def _get_all_assets(self) -> List[Tuple[str, int]]:
-        """获取所有用户资产"""
+        """获取所有用户资产（优化版：单次查询）"""
         async with aiosqlite.connect(self.db_path) as db:
-            cursor = await db.execute("SELECT user_id FROM users")
-            users = await cursor.fetchall()
+            # 一次性查询所有用户的现金、银行和股票市值
+            cursor = await db.execute("""
+                SELECT 
+                    u.user_id,
+                    COALESCE(u.balance, 0) + COALESCE(u.bank_balance, 0) + COALESCE(s.stock_value, 0) as total
+                FROM users u
+                LEFT JOIN (
+                    SELECT 
+                        sh.user_id,
+                        SUM(sh.remaining * sp.current_price) as stock_value
+                    FROM stock_holdings sh
+                    JOIN stock_prices sp ON sh.stock_name = sp.stock_name
+                    WHERE sh.remaining > 0 AND sp.delisted = 0
+                    GROUP BY sh.user_id
+                ) s ON u.user_id = s.user_id
+            """)
+            rows = await cursor.fetchall()
         
-        result = []
-        for (uid,) in users:
-            total, _, _, _ = await self._get_user_asset(uid)
-            result.append((uid, total))
-        
-        return result
+        return [(row[0], int(row[1]) if row[1] else 0) for row in rows]
     
     async def _get_rank(self, user_id: str) -> Tuple[int, float]:
-        """获取排名和百分位"""
+        """获取排名和百分位（优化版）"""
         all_assets = await self._get_all_assets()
         if not all_assets:
             return 1, 0.0
         
+        # 按资产排序
         sorted_assets = sorted(all_assets, key=lambda x: x[1], reverse=True)
         total = len(sorted_assets)
         
-        user_total, _, _, _ = await self._get_user_asset(user_id)
-        
+        # 查找用户排名
         rank = 1
         for i, (uid, asset) in enumerate(sorted_assets, 1):
             if uid == user_id:
@@ -1586,12 +1596,27 @@ class EconomyPlugin(Star):
     
     @filter.on_llm_response(priority=200)
     async def on_llm_response(self, event: AstrMessageEvent, resp: LLMResponse) -> None:
-        """处理LLM响应，检查是否包含奖惩指令"""
+        """处理LLM响应，检查是否包含奖惩指令（带安全校验）"""
         logger.info("[on_llm_response] 方法被调用!")
         try:
             await self._ensure_db()
-            
+
             user_id = str(event.get_sender_id())
+
+            # 安全检查：只允许特定用户触发经济操作（防止提示注入攻击）
+            # 获取用户今日消息数，新用户或消息数异常的不执行经济操作
+            async with aiosqlite.connect(self.db_path) as db:
+                cursor = await db.execute(
+                    "SELECT COUNT(*) FROM user_daily_tarot WHERE user_id = ? AND date = ?",
+                    (user_id, today_str())
+                )
+                row = await cursor.fetchone()
+                interaction_count = row[0] if row else 0
+
+                # 如果用户今日没有正常交互记录，可能是攻击，跳过经济操作
+                if interaction_count == 0:
+                    logger.warning(f"[on_llm_response] 用户 {user_id} 今日无正常交互记录，跳过经济操作（安全检查）")
+                    return
             
             # 获取AI的回复内容
             response_text = ""
@@ -2743,9 +2768,17 @@ class EconomyPlugin(Star):
         """广播公告到白名单群"""
         success_count = 0
         failed_count = 0
-        
-        # 获取白名单（使用 getattr 提供默认值，兼容旧配置）
-        whitelist = getattr(CONFIG, 'ANNOUNCEMENT_WHITELIST', ["1047215229", "468563035", "1078585038"])
+
+        # 从config_manager获取白名单（持久化存储）
+        whitelist_data = await self.config_manager.get("announcement_whitelist")
+        if whitelist_data:
+            try:
+                whitelist = json.loads(whitelist_data)
+            except:
+                whitelist = ["1047215229", "468563035", "1078585038"]
+        else:
+            whitelist = ["1047215229", "468563035", "1078585038"]
+
         if not whitelist:
             logger.warning("公告白名单为空，无法广播")
             return {"success": 0, "failed": 0, "skipped": 0}
@@ -2873,18 +2906,26 @@ class EconomyPlugin(Star):
     async def cmd_announcement_whitelist(self, event: AstrMessageEvent):
         """管理公告推送白名单 - /公告白名单 <add/remove/list> [群号]"""
         user_id = str(event.get_sender_id())
-        
+
         # 检查是否为管理员
         if user_id not in CONFIG.ADMIN_IDS:
             yield event.plain_result("⚠️ 权限不足！此命令仅管理员可用")
             return
-        
+
         # 获取命令参数
         msg_text = event.message_str
         args = msg_text.split()
-        
-        # 获取白名单（使用 getattr 提供默认值，兼容旧配置）
-        whitelist = getattr(CONFIG, 'ANNOUNCEMENT_WHITELIST', ["1047215229", "468563035", "1078585038"])
+
+        # 从config_manager获取白名单（持久化存储）
+        whitelist_data = await self.config_manager.get("announcement_whitelist")
+        if whitelist_data:
+            try:
+                import json
+                whitelist = json.loads(whitelist_data)
+            except:
+                whitelist = ["1047215229", "468563035", "1078585038"]
+        else:
+            whitelist = ["1047215229", "468563035", "1078585038"]
         
         if len(args) < 2:
             # 显示当前白名单
@@ -2932,9 +2973,11 @@ class EconomyPlugin(Star):
             if group_id in whitelist:
                 yield event.plain_result(f"📢 群 {group_id} 已在白名单中")
                 return
-            
+
             whitelist.append(group_id)
-            yield event.plain_result(f"[OK] 已添加群 {group_id} 到白名单\n[图表] 当前白名单共 {len(whitelist)} 个群")
+            # 持久化到数据库
+            await self.config_manager.set("announcement_whitelist", json.dumps(whitelist))
+            yield event.plain_result(f"✅ 已添加群 {group_id} 到白名单\n📊 当前白名单共 {len(whitelist)} 个群")
         
         elif action == "remove":
             # 从白名单移除群
@@ -2946,9 +2989,11 @@ class EconomyPlugin(Star):
             if group_id not in whitelist:
                 yield event.plain_result(f"📢 群 {group_id} 不在白名单中")
                 return
-            
+
             whitelist.remove(group_id)
-            yield event.plain_result(f"[OK] 已从白名单移除群 {group_id}\n[图表] 当前白名单共 {len(whitelist)} 个群")
+            # 持久化到数据库
+            await self.config_manager.set("announcement_whitelist", json.dumps(whitelist))
+            yield event.plain_result(f"✅ 已从白名单移除群 {group_id}\n📊 当前白名单共 {len(whitelist)} 个群")
         
         else:
             yield event.plain_result("❌ 未知操作！\n💡 用法：/公告白名单 add 群号\n   /公告白名单 remove 群号\n   /公告白名单 list")
