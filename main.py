@@ -252,9 +252,9 @@ class DBManager:
             # 初始化默认股票
             default_stocks = [
                 ("菲比教会", 10, "🕊️", "菲比啾比，菲比啾比！"),
-                ("莫宁时代", 50, "��", "我将，诘问群星！"),
-                ("今州科技", 200, "��", "今州地大物博"),
-                ("深空联合", 1000, "��", "我们是薪火的传承者")
+                ("莫宁时代", 50, "🎁", "我将，诘问群星！"),
+                ("今州科技", 200, "🎁", "今州地大物博"),
+                ("深空联合", 1000, "🎁", "我们是薪火的传承者")
             ]
             
             for name, price, emoji, desc in default_stocks:
@@ -622,7 +622,7 @@ class EconomyPlugin(Star):
                             "UPDATE users SET balance = balance + ? WHERE user_id = ?",
                             (reward, user_id)
                         )
-                        effect_msg = f"\n�� 效果：{effect_desc}\n实际获得 {reward} 星声"
+                        effect_msg = f"\n🎁 效果：{effect_desc}\n实际获得 {reward} 星声"
                     
                     # 失去星声（按总资产比例）
                     elif effect_type == "balance_penalty":
@@ -647,7 +647,7 @@ class EconomyPlugin(Star):
                             "UPDATE users SET balance = balance - ? WHERE user_id = ?",
                             (penalty, user_id)
                         )
-                        effect_msg = f"\n�� 效果：{effect_desc}\n总资产 {format_num(total_assets)}，实际失去 {format_num(penalty)} 星声（{penalty_rate*100:.1f}%）"
+                        effect_msg = f"\n🎁 效果：{effect_desc}\n总资产 {format_num(total_assets)}，实际失去 {format_num(penalty)} 星声（{penalty_rate*100:.1f}%）"
                     
                     # 获得好感值
                     elif effect_type == "favor_value_reward":
@@ -660,7 +660,7 @@ class EconomyPlugin(Star):
                             "UPDATE users SET favor_value = COALESCE(favor_value, 0) + ? WHERE user_id = ?",
                             (favor_reward, user_id)
                         )
-                        effect_msg = f"\n�� 效果：{effect_desc}\n实际获得 {favor_reward} 点好感值"
+                        effect_msg = f"\n🎁 效果：{effect_desc}\n实际获得 {favor_reward} 点好感值"
 
                     # 扣除好感值
                     elif effect_type == "favor_value_penalty":
@@ -673,7 +673,7 @@ class EconomyPlugin(Star):
                             "UPDATE users SET favor_value = COALESCE(favor_value, 0) - ? WHERE user_id = ?",
                             (favor_penalty, user_id)
                         )
-                        effect_msg = f"\n�� 效果：{effect_desc}\n实际扣除 {favor_penalty} 点好感值"
+                        effect_msg = f"\n🎁 效果：{effect_desc}\n实际扣除 {favor_penalty} 点好感值"
                     
                     # 持仓股票立即上涨（随机一只）
                     elif effect_type == "stock_price_up":
@@ -705,9 +705,9 @@ class EconomyPlugin(Star):
                                     "UPDATE stock_prices SET current_price = ? WHERE stock_name = ?",
                                     (new_price, stock_name)
                                 )
-                                effect_msg = f"\n�� 效果：{effect_desc}\n【{stock_name}】上涨 {increase_rate*100:.1f}%"
+                                effect_msg = f"\n🎁 效果：{effect_desc}\n【{stock_name}】上涨 {increase_rate*100:.1f}%"
                         else:
-                            effect_msg = f"\n�� 效果：{effect_desc}\n但你没有持仓股票"
+                            effect_msg = f"\n🎁 效果：{effect_desc}\n但你没有持仓股票"
 
                     # 持仓股票立即下跌（随机一只）
                     elif effect_type == "stock_price_down":
@@ -739,9 +739,9 @@ class EconomyPlugin(Star):
                                     "UPDATE stock_prices SET current_price = ? WHERE stock_name = ?",
                                     (new_price, stock_name)
                                 )
-                                effect_msg = f"\n�� 效果：{effect_desc}\n【{stock_name}】下跌 {decrease_rate*100:.1f}%"
+                                effect_msg = f"\n🎁 效果：{effect_desc}\n【{stock_name}】下跌 {decrease_rate*100:.1f}%"
                         else:
-                            effect_msg = f"\n�� 效果：{effect_desc}\n但你没有持仓股票"
+                            effect_msg = f"\n🎁 效果：{effect_desc}\n但你没有持仓股票"
                     
                     # 失去工作
                     elif effect_type == "lose_job":
@@ -758,11 +758,11 @@ class EconomyPlugin(Star):
                                     "DELETE FROM user_work WHERE user_id = ?",
                                     (user_id,)
                                 )
-                                effect_msg = f"\n�� 效果：{effect_desc}\n你失去了工作：{work_name}"
+                                effect_msg = f"\n🎁 效果：{effect_desc}\n你失去了工作：{work_name}"
                             else:
-                                effect_msg = f"\n�� 效果：{effect_desc}\n但你现在是无业游民"
+                                effect_msg = f"\n🎁 效果：{effect_desc}\n但你现在是无业游民"
                         except Exception as e:
-                            e  # 修复：添加具体异常类型ffect_msg = f"\n�� 效果：{effect_desc}\n但你现在是无业游民"
+                            e  # 修复：添加具体异常类型ffect_msg = f"\n🎁 效果：{effect_desc}\n但你现在是无业游民"
                     
                     # 占卜次数增加
                     elif effect_type == "lottery_extra":
@@ -771,11 +771,11 @@ class EconomyPlugin(Star):
                             "INSERT OR REPLACE INTO user_lottery_extra (user_id, extra_count, date) VALUES (?, COALESCE((SELECT extra_count FROM user_lottery_extra WHERE user_id = ? AND date = ?), 0) + ?, ?)",
                             (user_id, user_id, today, effect_value, today)
                         )
-                        effect_msg = f"\n�� 效果：{effect_desc}"
+                        effect_msg = f"\n🎁 效果：{effect_desc}"
                     
                     # 其他效果
                     else:
-                        effect_msg = f"\n�� 效果：{effect_desc}"
+                        effect_msg = f"\n🎁 效果：{effect_desc}"
                 
                 await db.execute(
                     "INSERT INTO user_daily_tarot (user_id, date, tarot_card, draw_time) VALUES (?, ?, ?, ?)",
@@ -786,7 +786,7 @@ class EconomyPlugin(Star):
                 tarot_msg = f"\n═══════════════════\n🔮 今日塔罗：【{card}】\n{desc}{effect_msg}"
         
         # 构建消息
-        wealth_icon = "��" if percentile < 0.1 else "��" if percentile < 0.5 else "��"
+        wealth_icon = "🎁" if percentile < 0.1 else "🎁" if percentile < 0.5 else "🎁"
         
         lines = [
             f"⛔ 签到成功！{wealth_icon} 财富排名：第{rank}名（前{int(percentile*100)}%）",
@@ -803,7 +803,7 @@ class EconomyPlugin(Star):
         if signin_result.get('signin_favor_bonus', 0) > 0:
             lines.append(f"💰 彩色成就加成：+{signin_result['signin_favor_bonus']}好感值")
         
-        lines.append(f"�� 赛季：S{CONFIG.CURRENT_SEASON}")
+        lines.append(f"🎁 赛季：S{CONFIG.CURRENT_SEASON}")
         
         if tax_bonus > 0:
             lines.append(f"🏛️️ 富豪税分红：+{tax_bonus}星声（奖池剩余{remaining_pool}）")
@@ -835,8 +835,8 @@ class EconomyPlugin(Star):
 💼 工作：/找工作 /应聘 工作名 /工作状态 /领工资
 📈 股票：/股市 /买入 股票 数量 /卖出 股票 数量 /持仓 /创立公司 名称 价格 描述 /宣告破产 公司 /研发 公司 金额 /股东 股票 /k线 股票
 🏛️️ 结社：/结社 /加入结社 名称 /我的结社
-�� 好感：/好感度 /好感度排行
-�� 成就：/成就 /塔罗牌
+🎁 好感：/好感度 /好感度排行
+🎁 成就：/成就 /塔罗牌
 🔧 管理：/高级签到帮助"""
         yield event.plain_result(help_text)
     
@@ -919,15 +919,15 @@ class EconomyPlugin(Star):
         await self.config_manager.set_season(new_season)
 
         yield event.plain_result(f"? 新赛季开启成功！现在是 S{new_season} 赛季\n\n" +
-                               "�� 赛季重置内容：\n" +
+                               "🎁 赛季重置内容：\n" +
                                "- 清空所有用户的抽卡资源\n" +
                                "- 清空所有用户的银行存款\n" +
                                "- 清空所有用户的股票持仓\n" +
                                "- 清空所有用户的工作状态\n" +
                                "- 清空所有用户的背包物品\n\n" +
-                               "�� 发放成就：\n" +
+                               "🎁 发放成就：\n" +
                                f"- 给所有用户发放金色成就 \"S{new_season-1}先行者\"\n\n" +
-                               "�� 保留内容：\n" +
+                               "🎁 保留内容：\n" +
                                "- 连续签到天数\n" +
                                "- 所有成就记录")
     
@@ -1067,7 +1067,7 @@ class EconomyPlugin(Star):
             total_favor = int(total_favor_row[0]) if total_favor_row and total_favor_row[0] else 1
             favor_level = int((favor_value / total_favor) * 520) if total_favor > 0 else 0
 
-        favor_info = f"\n�� 好感值：{favor_value}  好感度：{favor_level}"
+        favor_info = f"\n🎁 好感值：{favor_value}  好感度：{favor_level}"
 
         msg = (
             f"👤 [{nickname}] 的资产\n"
@@ -1132,9 +1132,9 @@ class EconomyPlugin(Star):
         
         yield event.plain_result(
             f"⛔ 转账成功！\n"
-            f"�� 转出：{format_num(amount)}星声\n"
+            f"🎁 转出：{format_num(amount)}星声\n"
             f"👤 给：{mask_id(target_id)}\n"
-            f"�� 您剩余：{format_num(sender['balance'] - amount)}星声"
+            f"🎁 您剩余：{format_num(sender['balance'] - amount)}星声"
         )
     
     @filter.command("资产排行榜")
@@ -1155,11 +1155,11 @@ class EconomyPlugin(Star):
         sorted_assets = sorted(all_assets, key=lambda x: x[1], reverse=True)
         
         if not sorted_assets:
-            yield event.plain_result("�� 暂无资产数据")
+            yield event.plain_result("🎁 暂无资产数据")
             return
         
         medals = ["🥇", "🥈", "🥉", "4️⃣", "5️⃣", "6️⃣", "7️⃣", "8️⃣", "9️⃣", "🔟"]
-        lines = ["�� 资产排行榜 Top 10", "═══════════════════"]
+        lines = ["🎁 资产排行榜 Top 10", "═══════════════════"]
 
         for i, (uid, total) in enumerate(sorted_assets[:10]):
             medal = medals[i] if i < len(medals) else f"{i+1}."
@@ -1267,7 +1267,7 @@ class EconomyPlugin(Star):
             history = await cursor.fetchall()
         
         if not history:
-            yield event.plain_result("�� 暂无经济数据")
+            yield event.plain_result("🎁 暂无经济数据")
             return
         
         latest = history[0]
@@ -1317,7 +1317,7 @@ class EconomyPlugin(Star):
             f"🏛️️ 富豪税与贫富差距报告\n"
             f"═══════════════════\n"
             f"💰 总收税：{format_num(total)}星声\n"
-            f"�� 今日奖池：{format_num(bonus)}星声\n"
+            f"🎁 今日奖池：{format_num(bonus)}星声\n"
             f"⛔ 已领取：{format_num(claimed)}星声\n"
             f"[包裹] 剩余：{format_num(remaining)}星声\n"
         )
@@ -1362,7 +1362,7 @@ class EconomyPlugin(Star):
         
         # 构建显示消息
         lines = [
-            f"�� {nickname} 的好感度信息",
+            f"🎁 {nickname} 的好感度信息",
             f"[双心] 好感度：{favor_info['favor_level']:.2f}/520"
         ]
         
@@ -1401,11 +1401,11 @@ class EconomyPlugin(Star):
         ranking = await self.favor_system.get_favor_ranking()
         
         if not ranking:
-            yield event.plain_result("�� 暂无好感度数据")
+            yield event.plain_result("🎁 暂无好感度数据")
             return
         
         lines = ["[双心] 好感度排行榜 Top 10", "═══════════════════"]
-        medals = ["��", "��", "��", "4��", "5��", "6��", "7��", "8��", "9��", "��"]
+        medals = ["🎁", "🎁", "🎁", "4🎁", "5🎁", "6🎁", "7🎁", "8🎁", "9🎁", "🎁"]
         
         # 获取所有用户的关系描述
         async with aiosqlite.connect(self.db_path) as db:
@@ -1420,7 +1420,7 @@ class EconomyPlugin(Star):
             lines.append(f"{medal} {name}")
             lines.append(f"   [双心] 好感度：{user_info.get('favor_level', 0)}")
             if ai_rel:
-                lines.append(f"   �� {ai_rel}")
+                lines.append(f"   🎁 {ai_rel}")
             if i < 10:
                 lines.append("")
         
@@ -1448,7 +1448,7 @@ class EconomyPlugin(Star):
             lines.extend([
                 "═══════════════════",
                 f"💡 我的排名：第 {my_rank} 名",
-                f"�� 我的好感度：{my_info.get('favor_level', 0)}",
+                f"🎁 我的好感度：{my_info.get('favor_level', 0)}",
                 f"[思考] 我们的关系：{my_ai_rel}"
             ])
         
@@ -1467,7 +1467,7 @@ class EconomyPlugin(Star):
         obtained_count = achievements.get("obtained_count", 0)
         total_count = achievements.get("total_count", 0)
         
-        lines = [f"�� {nickname} 的成就", "═══════════════════"]
+        lines = [f"🎁 {nickname} 的成就", "═══════════════════"]
         
         if obtained:
             # 按稀有度排序
@@ -1500,15 +1500,15 @@ class EconomyPlugin(Star):
                         "colorful": "每日签到额外获得1点好感值"
                     }.get(rarity, "无加成")
                 lines.append(f"   ? 加成：{bonus_desc}")
-                lines.append(f"   �� {obtain_time}")
+                lines.append(f"   🎁 {obtain_time}")
                 lines.append("")
         else:
-            lines.append("�� 暂未获得任何成就")
+            lines.append("🎁 暂未获得任何成就")
         
         lines.extend([
             "═══════════════════",
-            f"�� 已获得：{obtained_count}/{total_count}",
-            "�� 完成各种任务可以获得成就，成就永久保存"
+            f"🎁 已获得：{obtained_count}/{total_count}",
+            "🎁 完成各种任务可以获得成就，成就永久保存"
         ])
         
         yield event.plain_result("\n".join(lines))
@@ -1532,7 +1532,7 @@ class EconomyPlugin(Star):
             yield event.plain_result("[邮箱] 暂无成就数据")
             return
         
-        lines = ["�� 所有人成就统计", "═══════════════════"]
+        lines = ["🎁 所有人成就统计", "═══════════════════"]
         
         # 统计每个用户的成就
         for uid, achievements in all_achievements.items():
@@ -1542,7 +1542,7 @@ class EconomyPlugin(Star):
             
             if achievements:
                 # 按稀有度分类
-                rarity_emojis = {"blue": "��", "purple": "��", "gold": "��", "colorful": "��"}
+                rarity_emojis = {"blue": "🎁", "purple": "🎁", "gold": "🎁", "colorful": "🎁"}
                 rarity_counts = {"blue": 0, "purple": 0, "gold": 0, "colorful": 0}
                 
                 for aid in achievements:
@@ -1596,7 +1596,7 @@ class EconomyPlugin(Star):
             count = await self.achievement_service.grant_achievement_to_all(achievement_id)
             yield event.plain_result(
                 f"⛔ 成功给 {count} 个用户授予成就！\n"
-                f"�� {achievement['emoji']} {achievement['name']}\n"
+                f"🎁 {achievement['emoji']} {achievement['name']}\n"
                 f"📝 {achievement['desc']}"
             )
         else:
@@ -1606,11 +1606,11 @@ class EconomyPlugin(Star):
             if success:
                 yield event.plain_result(
                     f"⛔ 成功给用户 {target} 授予成就！\n"
-                    f"�� {achievement['emoji']} {achievement['name']}\n"
+                    f"🎁 {achievement['emoji']} {achievement['name']}\n"
                     f"📝 {achievement['desc']}"
                 )
             else:
-                yield event.plain_result(f"�� 用户 {target} 已经拥有该成就。")
+                yield event.plain_result(f"🎁 用户 {target} 已经拥有该成就。")
     
     @filter.command("重置签到")
     async def cmd_reset_signin(self, event: AstrMessageEvent):
@@ -1655,10 +1655,10 @@ class EconomyPlugin(Star):
             
             yield event.plain_result(
                 f"⛔ 已重置所有人的今日签到状态！\n"
-                f"�� 重置签到记录：{signin_count} 人\n"
-                f"�� 重置塔罗牌记录：{tarot_count} 人\n"
+                f"🎁 重置签到记录：{signin_count} 人\n"
+                f"🎁 重置塔罗牌记录：{tarot_count} 人\n"
                 f"📅 连续签到天数保持不变\n"
-                f"�� 所有人可以重新签到并抽取塔罗牌"
+                f"🎁 所有人可以重新签到并抽取塔罗牌"
             )
         else:
             # 重置特定用户的今日签到状态
@@ -1682,7 +1682,7 @@ class EconomyPlugin(Star):
             yield event.plain_result(
                 f"⛔ 已重置用户 {target_user} 的今日签到状态！\n"
                 f"📅 连续签到天数保持不变\n"
-                f"�� 用户可以重新签到并抽取塔罗牌"
+                f"🎁 用户可以重新签到并抽取塔罗牌"
             )
     
     @filter.command("塔罗牌")
@@ -1703,8 +1703,8 @@ class EconomyPlugin(Star):
         
         if not row:
             yield event.plain_result(
-                "�� 你今天还没有抽取塔罗牌！\n"
-                "�� 请先签到或抽取塔罗牌"
+                "🎁 你今天还没有抽取塔罗牌！\n"
+                "🎁 请先签到或抽取塔罗牌"
             )
             return
         
@@ -1716,9 +1716,9 @@ class EconomyPlugin(Star):
         yield event.plain_result(
             f"🔮 今日塔罗牌：【{card}】\n"
             f"═══════════════════\n"
-            f"�� {desc}\n"
-            f"�� 效果：{effect_desc}\n"
-            f"�� 抽取时间：{draw_time}"
+            f"🎁 {desc}\n"
+            f"🎁 效果：{effect_desc}\n"
+            f"🎁 抽取时间：{draw_time}"
         )
     
     # ============== 消息事件处理 ==============
@@ -1929,7 +1929,7 @@ class EconomyPlugin(Star):
         user_id = str(event.get_sender_id())
         bank_info = await self.bank_service.get_bank_info(user_id)
         
-        vip_status = "�� 贵宾卡生效中（利率1.5%，取款免手续费）\n" if bank_info["has_vip"] else ""
+        vip_status = "🎁 贵宾卡生效中（利率1.5%，取款免手续费）\n" if bank_info["has_vip"] else ""
         
         msg = (
             f"🏦 我的银行\n"
@@ -1966,7 +1966,7 @@ class EconomyPlugin(Star):
         
         yield event.plain_result(
             f"⛔ 存款成功！\n"
-            f"�� 银行存款：{format_num(result['new_bank'])}星声\n"
+            f"🎁 银行存款：{format_num(result['new_bank'])}星声\n"
             f"[包裹] 剩余抽卡资源：{format_num(result['new_cash'])}星声\n"
             f"📈 日息{result['rate_pct']}%{vip_str}"
         )
@@ -1997,7 +1997,7 @@ class EconomyPlugin(Star):
         yield event.plain_result(
             f"⛔ 取款成功！\n"
             f"💰 取出：{format_num(result['amount'])}星声\n"
-            f"�� 手续费：{fee_str}\n"
+            f"🎁 手续费：{fee_str}\n"
             f"💵 到账抽卡资源：{format_num(result['actual'])}星声\n"
             f"💵 现在抽卡资源：{format_num(result['new_cash'])}星声\n"
             f"[包裹] 剩余存款：{format_num(result['new_bank'])}星声"
@@ -2054,8 +2054,8 @@ class EconomyPlugin(Star):
         
         yield event.plain_result(
             f"⛔ 购买成功！\n"
-            f"�� {result['item_name']} x{result['count']}\n"
-            f"�� 花费：{format_num(result['total_price'])}星声\n"
+            f"🎁 {result['item_name']} x{result['count']}\n"
+            f"🎁 花费：{format_num(result['total_price'])}星声\n"
             f"[包裹] 剩余星声：{format_num(result['new_balance'])}星声"
         )
     
@@ -2072,14 +2072,14 @@ class EconomyPlugin(Star):
             await self.achievement_service.check_achievements(user_id, "flower_check", {"count": inventory["flower_count"]})
 
         if not inventory["items"]:
-            msg = "�� 背包空空如也\n"
+            msg = "🎁 背包空空如也\n"
         else:
-            msg = "�� 我的背包\n═══════════════════\n"
+            msg = "🎁 我的背包\n═══════════════════\n"
             for name, qty in inventory["items"]:
                 msg += f"[包裹] {name} x{qty}\n"
 
-        msg += f"\n�� 今日剩余占卜次数：{inventory['remaining_lottery_count']}/{CONFIG.LOTTERY_LIMIT}次\n"
-        msg += "�� 使用：/使用 占卜券 金额"
+        msg += f"\n🎁 今日剩余占卜次数：{inventory['remaining_lottery_count']}/{CONFIG.LOTTERY_LIMIT}次\n"
+        msg += "🎁 使用：/使用 占卜券 金额"
 
         yield event.plain_result(msg)
     
@@ -2142,7 +2142,7 @@ class EconomyPlugin(Star):
                         # 授予金色成就：形同陌路
                         achievement_id = "golden_stranger"
                         await self.achievement_service._grant_achievement(db, user_id, achievement_id)
-                        achievement_msg = "\n�� 恭喜获得金色成就：形同陌路"
+                        achievement_msg = "\n🎁 恭喜获得金色成就：形同陌路"
                 
                 await db.commit()
             
@@ -2173,20 +2173,20 @@ class EconomyPlugin(Star):
             # 构建结果消息
             multiplier_str = f"{result['multiplier']:.1f}x" if isinstance(result['multiplier'], float) else f"{result['multiplier']}x"
             if result["profit"] >= 0:
-                result_str = f"盈利：+{format_num(result['profit'])}星声 ��"
+                result_str = f"盈利：+{format_num(result['profit'])}星声 🎁"
             else:
-                result_str = f"亏损：{format_num(result['profit'])}星声 ��"
+                result_str = f"亏损：{format_num(result['profit'])}星声 🎁"
 
-            allin_tag = "�� 【ALL IN】 " if result["is_allin"] else ""
+            allin_tag = "🎁 【ALL IN】 " if result["is_allin"] else ""
 
             msg = (
                 f"{allin_tag}{result['result_emoji']} 占卜结果：{result['result_type']}！\n"
-                f"�� 倍数：{multiplier_str}\n"
-                f"�� 投入：{format_num(result['bet'])}星声 → 获得：{format_num(result['final'])}星声\n"
-                f"�� {result_str}\n"
-                f"�� 当前抽卡资源：{format_num(result['new_cash'])}星声\n"
+                f"🎁 倍数：{multiplier_str}\n"
+                f"🎁 投入：{format_num(result['bet'])}星声 → 获得：{format_num(result['final'])}星声\n"
+                f"🎁 {result_str}\n"
+                f"🎁 当前抽卡资源：{format_num(result['new_cash'])}星声\n"
                 f"[包裹] 剩余占卜券：{result['ticket_count']}张\n"
-                f"�� 今日占卜：{result['used_count']}/{CONFIG.LOTTERY_LIMIT}次"
+                f"🎁 今日占卜：{result['used_count']}/{CONFIG.LOTTERY_LIMIT}次"
             )
 
             yield event.plain_result(msg)
@@ -2281,15 +2281,15 @@ class EconomyPlugin(Star):
                     # 授予金色成就：形同陌路
                     achievement_id = "golden_stranger"
                     await self.achievement_service._grant_achievement(db, user_id, achievement_id)
-                    achievement_msg = "\n�� 恭喜获得金色成就：形同陌路"
+                    achievement_msg = "\n🎁 恭喜获得金色成就：形同陌路"
             
             await db.commit()
         
         yield event.plain_result(
             f"⛔ 赠送成功！\n"
-            f"�� 购买了 {quantity} 个{item_name}\n"
-            f"�� 花费：{format_num(total_price)}星声\n"
-            f"�� 增加了 {favor_increase} 点好感值{achievement_msg}"
+            f"🎁 购买了 {quantity} 个{item_name}\n"
+            f"🎁 花费：{format_num(total_price)}星声\n"
+            f"🎁 增加了 {favor_increase} 点好感值{achievement_msg}"
         )
     
     @filter.command("Allin")
@@ -2356,20 +2356,20 @@ class EconomyPlugin(Star):
         # 构建结果消息
         multiplier_str = f"{result['multiplier']:.1f}x" if isinstance(result['multiplier'], float) else f"{result['multiplier']}x"
         if result["profit"] >= 0:
-            result_str = f"盈利：+{format_num(result['profit'])}星声 ��"
+            result_str = f"盈利：+{format_num(result['profit'])}星声 🎁"
         else:
-            result_str = f"亏损：{format_num(result['profit'])}星声 ��"
+            result_str = f"亏损：{format_num(result['profit'])}星声 🎁"
 
-        allin_tag = "�� 【ALL IN】 " if result["is_allin"] else ""
+        allin_tag = "🎁 【ALL IN】 " if result["is_allin"] else ""
 
         msg = (
             f"{allin_tag}{result['result_emoji']} 占卜结果：{result['result_type']}！\n"
-            f"�� 倍数：{multiplier_str}\n"
-            f"�� 投入：{format_num(result['bet'])}星声 → 获得：{format_num(result['final'])}星声\n"
-            f"�� {result_str}\n"
-            f"�� 当前抽卡资源：{format_num(result['new_cash'])}星声\n"
+            f"🎁 倍数：{multiplier_str}\n"
+            f"🎁 投入：{format_num(result['bet'])}星声 → 获得：{format_num(result['final'])}星声\n"
+            f"🎁 {result_str}\n"
+            f"🎁 当前抽卡资源：{format_num(result['new_cash'])}星声\n"
             f"[包裹] 剩余占卜券：{result['ticket_count']}张\n"
-            f"�� 今日占卜：{result['used_count']}/{CONFIG.LOTTERY_LIMIT}次"
+            f"🎁 今日占卜：{result['used_count']}/{CONFIG.LOTTERY_LIMIT}次"
         )
 
         yield event.plain_result(msg)
@@ -2383,9 +2383,9 @@ class EconomyPlugin(Star):
         prob_info = await self.shop_service.get_lottery_probability(user_id)
 
         lines = [
-            "�� 占卜概率分布",
+            "🎁 占卜概率分布",
             "═══════════════════",
-            f"�� 今日剩余：{prob_info['remaining']}/{prob_info['limit']} 次",
+            f"🎁 今日剩余：{prob_info['remaining']}/{prob_info['limit']} 次",
             "",
             "倍数范围　　　│ 概率　 │ 结果　　　│",
             "──────────────┼───────┼───────────│"
@@ -2412,13 +2412,13 @@ class EconomyPlugin(Star):
         await self._ensure_db()
         
         works = await self.work_service.get_works()
-        lines = ["�� 人才市场 - 选择你的职业", "═══════════════════"]
+        lines = ["🎁 人才市场 - 选择你的职业", "═══════════════════"]
         
         for name, config in works.items():
             lines.append(f"{config['emoji']} {name}")
-            lines.append(f"   �� 入职费：{format_num(config['price'])}星声")
-            lines.append(f"   �� 时薪：{format_num(config['min'])}~{format_num(config['max'])}星声/小时")
-            lines.append(f"   �� {config['desc']}")
+            lines.append(f"   🎁 入职费：{format_num(config['price'])}星声")
+            lines.append(f"   🎁 时薪：{format_num(config['min'])}~{format_num(config['max'])}星声/小时")
+            lines.append(f"   🎁 {config['desc']}")
             lines.append("")
         
         lines.append("💡 用法：/应聘 职业名")
@@ -2446,8 +2446,8 @@ class EconomyPlugin(Star):
         
         yield event.plain_result(
             f"⛔ 成功入职：{result['emoji']}{result['work_name']}！\n"
-            f"�� 花费：{format_num(result['price'])}星声\n"
-            f"�� 开始时间：{result['start_time']}"
+            f"🎁 花费：{format_num(result['price'])}星声\n"
+            f"🎁 开始时间：{result['start_time']}"
         )
     
     @filter.command("工作状态")
@@ -2463,15 +2463,15 @@ class EconomyPlugin(Star):
             return
         
         msg = (
-            f"�� 当前工作：{result['emoji']}{result['work_name']}\n"
-            f"�� {result['desc']}\n"
-            f"�� 已工作：{result['hours_passed']}小时\n"
-            f"�� 预计可领：约{format_num(result['pending'])}星声\n"
-            f"�� 累计收入：{format_num(result['total_earned'])}星声\n"
+            f"🎁 当前工作：{result['emoji']}{result['work_name']}\n"
+            f"🎁 {result['desc']}\n"
+            f"🎁 已工作：{result['hours_passed']}小时\n"
+            f"🎁 预计可领：约{format_num(result['pending'])}星声\n"
+            f"🎁 累计收入：{format_num(result['total_earned'])}星声\n"
         )
         
         if result["hours_passed"] > 0:
-            msg += f"\n�� 发送 /领工资 领取{result['hours_passed']}小时工资"
+            msg += f"\n🎁 发送 /领工资 领取{result['hours_passed']}小时工资"
         else:
             msg += f"\n? 还需工作{60 - datetime.now().minute}分钟可领工资"
         
@@ -2490,9 +2490,9 @@ class EconomyPlugin(Star):
             return
         
         yield event.plain_result(
-            f"�� 工资到账！\n"
-            f"�� 职业：{result['emoji']}{result['work_name']}\n"
-            f"�� 工作时间：{result['hours']}小时\n"
+            f"🎁 工资到账！\n"
+            f"🎁 职业：{result['emoji']}{result['work_name']}\n"
+            f"🎁 工作时间：{result['hours']}小时\n"
             f" 获得工资：{format_num(result['total_earnings'])}星声\n"
             f" 当前余额：{format_num(result['new_balance'])}星声"
         )
@@ -2556,8 +2556,8 @@ class EconomyPlugin(Star):
         
         yield event.plain_result(
             f"⛔ 买入成功！\n"
-            f"�� {result['stock_name']}\n"
-            f"�� 买入价：{result['price']:.2f}\n"
+            f"🎁 {result['stock_name']}\n"
+            f"🎁 买入价：{result['price']:.2f}\n"
             f" 数量：{result['quantity']}\n"
             f" 花费：{format_num(result['total_cost'])}星声"
         )
@@ -2590,11 +2590,11 @@ class EconomyPlugin(Star):
         
         yield event.plain_result(
             f"⛔ 卖出成功！\n"
-            f"�� {result['stock_name']}\n"
-            f"�� 卖出价：{result['price']:.2f}\n"
-            f"�� 数量：{result['quantity']}\n"
-            f"�� 成交额：{format_num(result['sell_amount'])}星声\n"
-            f"�� 手续费：{format_num(result['fee'])}\n"
+            f"🎁 {result['stock_name']}\n"
+            f"🎁 卖出价：{result['price']:.2f}\n"
+            f"🎁 数量：{result['quantity']}\n"
+            f"🎁 成交额：{format_num(result['sell_amount'])}星声\n"
+            f"🎁 手续费：{format_num(result['fee'])}\n"
             f" 净收入：{format_num(result['net_amount'])}星声"
         )
     
@@ -2610,19 +2610,19 @@ class EconomyPlugin(Star):
             yield event.plain_result(result["message"])
             return
         
-        lines = ["�� 我的持仓", "═══════════════════"]
+        lines = ["🎁 我的持仓", "═══════════════════"]
         
         for item in result["portfolio"]:
             lines.append(f"{item['emoji']} {item['stock_name']}")
-            lines.append(f"   �� 持有：{item['quantity']:.2f} | 成本：{item['avg_cost']:.2f}")
-            lines.append(f"   �� 现价：{item['current_price']:.2f} | 市值：{format_num(item['market_value'])}")
+            lines.append(f"   🎁 持有：{item['quantity']:.2f} | 成本：{item['avg_cost']:.2f}")
+            lines.append(f"   🎁 现价：{item['current_price']:.2f} | 市值：{format_num(item['market_value'])}")
             lines.append(f"   {item['arrow']} 盈亏：{item['profit']:+,} ({item['profit_pct']:+.2f}%)")
             lines.append("")
         
         lines.extend([
             "═══════════════════",
-            f"�� 总市值：{format_num(result['total_value'])}",
-            f"�� 总成本：{format_num(result['total_cost'])}",
+            f"🎁 总市值：{format_num(result['total_value'])}",
+            f"🎁 总成本：{format_num(result['total_cost'])}",
             f" 总盈亏：{result['total_profit']:+,} ({result['total_profit_pct']:+.2f}%)"
         ])
         
@@ -2657,11 +2657,11 @@ class EconomyPlugin(Star):
             return
         
         yield event.plain_result(
-            f"�� 公司创立成功！\n"
-            f"�� {result['company_name']}\n"
-            f"�� 初始股价：{result['init_price']:.2f}星声\n"
+            f"🎁 公司创立成功！\n"
+            f"🎁 {result['company_name']}\n"
+            f"🎁 初始股价：{result['init_price']:.2f}星声\n"
             f" {result['desc']}\n"
-            f"�� 启动资金：{format_num(result['required'])}星声\n"
+            f"🎁 启动资金：{format_num(result['required'])}星声\n"
             f" 您获得10万股创始股份"
         )
     
@@ -2685,7 +2685,7 @@ class EconomyPlugin(Star):
             return
         
         yield event.plain_result(
-            f"�� {result['company_name']} 已宣告破产退市\n"
+            f"🎁 {result['company_name']} 已宣告破产退市\n"
             f"所有股东持仓将保留但无法交易"
         )
     
@@ -2717,8 +2717,8 @@ class EconomyPlugin(Star):
         
         yield event.plain_result(
             f" 研发成功！\n"
-            f"�� {result['company_name']}\n"
-            f"�� 投入：{format_num(result['amount'])}星声\n"
+            f"🎁 {result['company_name']}\n"
+            f"🎁 投入：{format_num(result['amount'])}星声\n"
             f" 股价提升：+{result['boost']*100:.2f}%\n"
             f" 新股价：{result['new_price']:.2f}星声"
         )
@@ -2742,13 +2742,13 @@ class EconomyPlugin(Star):
             yield event.plain_result(result["message"])
             return
         
-        lines = [f"�� {result['stock_name']} 股东列表", "═══════════════════"]
+        lines = [f"🎁 {result['stock_name']} 股东列表", "═══════════════════"]
         
         if result["controlling_shareholder"]:
-            lines.append(f"�� 控股股东：{result['controlling_shareholder']['name']}")
+            lines.append(f"🎁 控股股东：{result['controlling_shareholder']['name']}")
             lines.append("")
         
-        lines.append(f"�� 总股数：{result['total_shares']:.2f}")
+        lines.append(f"🎁 总股数：{result['total_shares']:.2f}")
         lines.append("")
         lines.append("股东列表：")
         lines.append("─────────────────────")
@@ -2828,14 +2828,14 @@ class EconomyPlugin(Star):
         if stats["total"] == 0:
             lines.append("目前还没有人加入任何结社")
         else:
-            lines.append(f"�� 总成员：{stats['total']} 人")
+            lines.append(f"🎁 总成员：{stats['total']} 人")
             lines.append("")
             
             for name, config in CONFIG.SOCIETIES.items():
                 data = stats["stats"].get(name, {"count": 0, "percentage": 0})
                 lines.append(f"{config['emoji']} {name}")
-                lines.append(f"   �� 人数：{data['count']} 人 ({data['percentage']:.1f}%)")
-                lines.append(f"   �� {config['desc']}")
+                lines.append(f"   🎁 人数：{data['count']} 人 ({data['percentage']:.1f}%)")
+                lines.append(f"   🎁 {config['desc']}")
                 lines.append("")
         
         lines.append("💡 用法：/加入结社 结社名")
@@ -2863,7 +2863,7 @@ class EconomyPlugin(Star):
         
         yield event.plain_result(
             f"⛔ 成功加入 {result['emoji']}{result['society_name']}！\n"
-            f"�� {result['desc']}"
+            f"🎁 {result['desc']}"
         )
     
     @filter.command("我的结社")
@@ -2881,15 +2881,15 @@ class EconomyPlugin(Star):
         lines = [
             f"{result['emoji']} {result['society_name']}",
             "═══════════════════",
-            f"�� {result['desc']}",
-            f"�� 成员：{result['member_count']}人",
-            f"�� 加入时间：{result['join_time']}"
+            f"🎁 {result['desc']}",
+            f"🎁 成员：{result['member_count']}人",
+            f"🎁 加入时间：{result['join_time']}"
         ]
 
         # 显示结社福利
         if result.get("benefits"):
             lines.append("")
-            lines.append("�� 结社福利：")
+            lines.append("🎁 结社福利：")
             lines.append(f"   {result['benefits']['type']}：{result['benefits']['detail']}")
 
         # 显示结社第一
@@ -2897,9 +2897,9 @@ class EconomyPlugin(Star):
             lines.append("")
             top_user = result["top_user"]
             if top_user["is_me"]:
-                lines.append(f"�� {top_user['title']}：{top_user['name']}（你）")
+                lines.append(f"🎁 {top_user['title']}：{top_user['name']}（你）")
             else:
-                lines.append(f"�� {top_user['title']}：{top_user['name']}")
+                lines.append(f"🎁 {top_user['title']}：{top_user['name']}")
             lines.append(f"   资产：{format_num(top_user['asset'])}星声")
 
         lines.append("")
