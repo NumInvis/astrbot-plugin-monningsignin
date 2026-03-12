@@ -300,7 +300,7 @@ class DBManager:
         self._ready = True
 
 # ============== 主插件类 ==============
-@register("astrbot_plugin_signin", "鬼神莫能窥", "莫宁宁的币", "2.0.0")
+@register("astrbot_plugin_signin", "NumInvis", "莫宁宁的币", "2.0.0")
 class EconomyPlugin(Star):
     """经济系统主插件"""
     
@@ -859,7 +859,7 @@ class EconomyPlugin(Star):
             return
         
         # 获取密码
-        args = event.get_message_text().split()
+        args = event.message_str.split()
         if len(args) < 2:
             yield event.plain_result("? 请输入密码：/新赛季 <密码>")
             return
@@ -936,9 +936,9 @@ class EconomyPlugin(Star):
             yield event.plain_result("? 权限不足！此命令仅管理员可用")
             return
         
-        args = event.get_message_text().split()
+        args = event.message_str.split()
         if len(args) < 2:
-            yield event.plain_result("? 用法：/admin <子命令> [参数]")
+            yield event.plain_result("⚠️ 用法：/admin <子命令> [参数]")
             return
         
         subcommand = args[1]
@@ -2182,11 +2182,14 @@ class EconomyPlugin(Star):
         
         # 处理占卜券
         elif item_name == "占卜券":
+            if len(parts) < 3:
+                yield event.plain_result("? 用法：/使用 占卜券 <星声数量>")
+                return
             try:
                 bet = int(parts[2])
                 if bet <= 0:
                     raise ValueError()
-            except:
+            except ValueError:
                 yield event.plain_result("? 请输入有效的星声数量！")
                 return
 
