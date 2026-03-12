@@ -588,7 +588,7 @@ class EconomyPlugin(Star):
         achievement_msg = ""
         if new_achievements:
             achievement_msg = "\n" + "\n".join([
-                f"�� 【新成就】{a['emoji']} {a['name']}\n   📝 {a['desc']}"
+                f"🏆 【新成就】{a['emoji']} {a['name']}\n   📝 {a['desc']}"
                 for a in new_achievements
             ])
         
@@ -783,7 +783,7 @@ class EconomyPlugin(Star):
                 )
                 await db.commit()
                 
-                tarot_msg = f"\n═══════════════════\n[水晶球] 今日塔罗：【{card}】\n{desc}{effect_msg}"
+                tarot_msg = f"\n═══════════════════\n🔮 今日塔罗：【{card}】\n{desc}{effect_msg}"
         
         # 构建消息
         wealth_icon = "��" if percentile < 0.1 else "��" if percentile < 0.5 else "��"
@@ -791,13 +791,13 @@ class EconomyPlugin(Star):
         lines = [
             f"⛔ 签到成功！{wealth_icon} 财富排名：第{rank}名（前{int(percentile*100)}%）",
             f"💰 基础：{signin_result['base']}星声（低保加成{int(percentile*100)}%）",
-            f"[火] 连续加成：{signin_result['bonus']}星声（{signin_result['consecutive_days']}天×{1 + (percentile * 0.5):.1f}倍）"
+            f"🔥 连续加成：{signin_result['bonus']}星声（{signin_result['consecutive_days']}天×{1 + (percentile * 0.5):.1f}倍）"
         ]
         
         # 显示成就加成
         # 蓝色成就：每日签到额外星声
         if signin_result.get('signin_extra', 0) > 0:
-            lines.append(f"[蓝圆] 蓝色成就加成：+{signin_result['signin_extra']}星声")
+            lines.append(f"🔵 蓝色成就加成：+{signin_result['signin_extra']}星声")
         
         # 彩色成就：每日签到额外好感值
         if signin_result.get('signin_favor_bonus', 0) > 0:
@@ -831,8 +831,8 @@ class EconomyPlugin(Star):
 
 💰 基础：/签到 /余额 /转账 @用户 金额 /资产排行榜 /经济 /税收
 🏦 银行：/银行 /存款 金额 /取款 金额
-[商店] 商店：/商店 /购买 商品 数量 /背包 /使用 物品 /占卜概率 /Allin
-[公文包] 工作：/找工作 /应聘 工作名 /工作状态 /领工资
+🛍️ 商店：/商店 /购买 商品 数量 /背包 /使用 物品 /占卜概率 /Allin
+💼 工作：/找工作 /应聘 工作名 /工作状态 /领工资
 📈 股票：/股市 /买入 股票 数量 /卖出 股票 数量 /持仓 /创立公司 名称 价格 描述 /宣告破产 公司 /研发 公司 金额 /股东 股票 /k线 股票
 🏛️️ 结社：/结社 /加入结社 名称 /我的结社
 �� 好感：/好感度 /好感度排行
@@ -927,7 +927,7 @@ class EconomyPlugin(Star):
                                "- 清空所有用户的背包物品\n\n" +
                                "�� 发放成就：\n" +
                                f"- 给所有用户发放金色成就 \"S{new_season-1}先行者\"\n\n" +
-                               "[图钉] 保留内容：\n" +
+                               "�� 保留内容：\n" +
                                "- 连续签到天数\n" +
                                "- 所有成就记录")
     
@@ -1714,7 +1714,7 @@ class EconomyPlugin(Star):
         effect_desc = effect.get("desc", "无特殊效果")
         
         yield event.plain_result(
-            f"[水晶球] 今日塔罗牌：【{card}】\n"
+            f"🔮 今日塔罗牌：【{card}】\n"
             f"═══════════════════\n"
             f"�� {desc}\n"
             f"�� 效果：{effect_desc}\n"
@@ -2010,7 +2010,7 @@ class EconomyPlugin(Star):
         await self._ensure_db()
         
         items = await self.shop_service.get_shop_items()
-        lines = ["[商店] 莫塔里银行商店", "═══════════════════"]
+        lines = ["🛍️ 莫塔里银行商店", "═══════════════════"]
         
         for name, info in items.items():
             limit = f"（每日限购{info['daily_limit']}次）" if info['daily_limit'] > 0 else "（永久有效）"
