@@ -29,7 +29,7 @@ class Config:
     
     # 商店
     SHOP_ITEMS = {
-        "占卜券": {"price": 10, "daily_limit": 10, "desc": "让卜灵给你占一卦吧！"},
+        "占卜券": {"price": 10, "daily_limit": 6, "desc": "让卜灵给你占一卦吧！"},
         "莫塔里贵宾卡": {"price": 8888, "daily_limit": 1, 
                       "desc": "银行日1.5%，取星声免手续费"},
         "花花": {"price": 5, "daily_limit": 99, "desc": "给莫宁送一朵花花"},

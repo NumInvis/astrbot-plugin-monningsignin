@@ -774,7 +774,7 @@ class StockService:
         }
     
     async def get_stock_kline(self, stock_name: str) -> dict:
-        """获取股票最近24小时每10分钟的价格数据"""
+        """获取股票最近24小时每10分钟的K线数据"""
         async with aiosqlite.connect(self.db_path) as db:
             # 检查股票是否存在
             cursor = await db.execute(
@@ -782,27 +782,27 @@ class StockService:
                 (stock_name,)
             )
             row = await cursor.fetchone()
-            
+
             if not row:
                 return {"success": False, "message": "股票不存在或已退市"}
-            
+
             current_price = row[0]
-            
+
             # 获取最近24小时的历史价格数据
             cutoff_time = (datetime.now() - timedelta(hours=24)).strftime("%Y-%m-%d %H:%M:%S")
             cursor = await db.execute(
                 """
-                SELECT price, timestamp 
-                FROM stock_price_history 
-                WHERE stock_name = ? AND timestamp >= ? 
+                SELECT price, timestamp
+                FROM stock_price_history
+                WHERE stock_name = ? AND timestamp >= ?
                 ORDER BY timestamp ASC
                 """,
                 (stock_name, cutoff_time)
             )
             history = await cursor.fetchall()
-        
-        # 处理历史数据，按每10分钟分组
-        price_data = []
+
+        # 处理历史数据，按每10分钟分组生成K线数据
+        kline_data = []
         if history:
             # 按每10分钟分组处理数据
             ten_min_data = {}
@@ -811,48 +811,56 @@ class StockService:
                 # 计算10分钟区间
                 minute_block = (timestamp.minute // 10) * 10
                 time_key = timestamp.strftime(f"%Y-%m-%d %H:{minute_block:02d}")
-                
+
                 if time_key not in ten_min_data:
                     ten_min_data[time_key] = {
                         "prices": [],
                         "timestamp": timestamp
                     }
                 ten_min_data[time_key]["prices"].append(price)
-            
-            # 生成每10分钟的价格数据（取平均值）
+
+            # 生成每10分钟的K线数据
             for time_key, data in sorted(ten_min_data.items()):
                 prices = data["prices"]
-                avg_price = sum(prices) / len(prices)
-                
-                price_data.append({
-                    "timestamp": time_key,
-                    "price": round(avg_price, 2)
-                })
+                if prices:
+                    kline_data.append({
+                        "timestamp": time_key,
+                        "open": round(prices[0], 2),
+                        "high": round(max(prices), 2),
+                        "low": round(min(prices), 2),
+                        "close": round(prices[-1], 2),
+                        "volume": len(prices)
+                    })
         else:
-            # 如果没有历史数据，生成基于当前价格的模拟数据
-            # 生成最近24小时每10分钟的数据点
+            # 如果没有历史数据，生成基于当前价格的模拟K线数据
             now = datetime.now()
-            for i in range(144):  # 24小时 * 6个10分钟 = 144个数据点
-                time_point = now - timedelta(minutes=i*10)
+            for i in range(24):  # 最近24小时，每小时一个数据点
+                time_point = now - timedelta(hours=i)
                 time_key = time_point.strftime("%Y-%m-%d %H:%M")
-                
+
                 # 模拟价格波动（±5%）
                 import random
                 variation = random.uniform(-0.05, 0.05)
                 simulated_price = current_price * (1 + variation)
-                
-                price_data.append({
+                high_price = simulated_price * (1 + random.uniform(0, 0.03))
+                low_price = simulated_price * (1 - random.uniform(0, 0.03))
+
+                kline_data.append({
                     "timestamp": time_key,
-                    "price": round(simulated_price, 2)
+                    "open": round(simulated_price, 2),
+                    "high": round(high_price, 2),
+                    "low": round(low_price, 2),
+                    "close": round(simulated_price, 2),
+                    "volume": random.randint(10, 100)
                 })
-            
+
             # 反转列表，使时间从早到晚
-            price_data.reverse()
-        
+            kline_data.reverse()
+
         return {
             "success": True,
             "stock_name": stock_name,
-            "price_data": price_data
+            "kline_data": kline_data
         }
     
     async def get_price_history(self, stock_name: str) -> dict:
