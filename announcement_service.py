@@ -5,6 +5,7 @@
 import aiosqlite
 from datetime import datetime
 from typing import List, Dict, Optional
+from astrbot.api import logger
 
 
 class AnnouncementService:

@@ -10,6 +10,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from config import CONFIG
 from utils import today_str, now_str, mask_id
+from astrbot.api import logger
 
 
 class FavorSystem:

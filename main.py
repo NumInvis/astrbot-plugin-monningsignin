@@ -342,6 +342,10 @@ class EconomyPlugin(Star):
         # 初始化公告服务
         self.announcement_service = AnnouncementService(self.db_path)
         
+        # 初始化配置管理器
+        from config_manager import ConfigManager
+        self.config_manager = ConfigManager(self.db_path)
+        
         self._initialized = False
         logger.info("【经济系统】插件加载中 v2.0.0")
     
@@ -379,7 +383,7 @@ class EconomyPlugin(Star):
                 try:
                     last_signin_date = row[3] if len(row) > 3 else None
                 except Exception as e:
-                    l  # 修复：添加具体异常类型ast_signin_date = None
+                    pass  # 修复：原变量l未定义：添加具体异常类型ast_signin_date = None
                 try:
                     consecutive = int(row[4]) if len(row) > 4 and row[4] else 0
                 except (ValueError, TypeError):
@@ -762,7 +766,7 @@ class EconomyPlugin(Star):
                             else:
                                 effect_msg = f"\n🎁 效果：{effect_desc}\n但你现在是无业游民"
                         except Exception as e:
-                            e  # 修复：添加具体异常类型ffect_msg = f"\n🎁 效果：{effect_desc}\n但你现在是无业游民"
+                            pass  # 修复：原变量e未定义：添加具体异常类型ffect_msg = f"\n🎁 效果：{effect_desc}\n但你现在是无业游民"
                     
                     # 占卜次数增加
                     elif effect_type == "lottery_extra":
@@ -968,7 +972,7 @@ class EconomyPlugin(Star):
                     daily_limit = int(args[5])
                     favor_value = int(args[6])
                 except Exception as e:
-                    y  # 修复：添加具体异常类型ield event.plain_result("? 价格、每日限购和好感值必须是整数！")
+                    pass  # 修复：原变量y未定义：添加具体异常类型ield event.plain_result("? 价格、每日限购和好感值必须是整数！")
                     return
                 
                 desc = " ".join(args[7:])
@@ -998,7 +1002,7 @@ class EconomyPlugin(Star):
             
             # 修改商品属性
             elif shop_cmd == "edit":
-                if len(args) < 5:
+                if len(args) < 6:
                     yield event.plain_result("? 用法：/admin shop edit <商品名> <属性> <值>")
                     return
                 
@@ -1101,7 +1105,7 @@ class EconomyPlugin(Star):
             if amount <= 0:
                 raise ValueError()
         except Exception as e:
-            y  # 修复：添加具体异常类型ield event.plain_result("? 金额必须是正整数！")
+            pass  # 修复：原变量y未定义：添加具体异常类型ield event.plain_result("? 金额必须是正整数！")
             return
         
         target_id = self._parse_target(event)
@@ -1380,7 +1384,7 @@ class EconomyPlugin(Star):
                     remaining_minutes = int(remaining.total_seconds() / 60)
                     lines.append(f"? 关系更新CD：{remaining_minutes}分钟后可更新")
                 except Exception as e:
-                    l  # 修复：添加具体异常类型ines.append("? 关系更新CD中")
+                    pass  # 修复：原变量l未定义：添加具体异常类型ines.append("? 关系更新CD中")
         else:
             lines.append("[思考] 我们的关系：还没有足够的互动记录...")
         
@@ -1737,10 +1741,10 @@ class EconomyPlugin(Star):
     async def _get_user_async(self, user_id: str) -> dict:
         """异步获取用户信息"""
         async with aiosqlite.connect(self.db_path) as db:
-            cursor = db.execute(
+            cursor = await db.execute(
                 "SELECT * FROM users WHERE user_id = ?", (user_id,)
             )
-            row = cursor.fetchone()
+            row = await cursor.fetchone()
             
             if row:
                 try:
@@ -1754,13 +1758,13 @@ class EconomyPlugin(Star):
                 try:
                     last_signin_date = row[3] if len(row) > 3 else None
                 except Exception as e:
-                    l  # 修复：添加具体异常类型ast_signin_date = None
+                    pass  # 修复：原变量l未定义：添加具体异常类型ast_signin_date = None
                 try:
                     consecutive = int(row[4]) if len(row) > 4 and row[4] else 0
                 except (ValueError, TypeError):
                     consecutive = 0
                 try:
-                    favor_value = int(row[5]) if len(row) > 5 and row[5] else 0
+                    favor_value = int(row[6]) if len(row) > 6 and row[6] else 0
                 except (ValueError, TypeError):
                     favor_value = 0
                 return {
@@ -1954,7 +1958,7 @@ class EconomyPlugin(Star):
             if amount <= 0:
                 raise ValueError()
         except Exception as e:
-            y  # 修复：添加具体异常类型ield event.plain_result("? 用法：/存款 100")
+            pass  # 修复：原变量y未定义：添加具体异常类型ield event.plain_result("? 用法：/存款 100")
             return
         
         result = await self.bank_service.deposit(user_id, amount)
@@ -1984,7 +1988,7 @@ class EconomyPlugin(Star):
             if amount <= 0:
                 raise ValueError()
         except Exception as e:
-            y  # 修复：添加具体异常类型ield event.plain_result("? 用法：/取款 100")
+            pass  # 修复：原变量y未定义：添加具体异常类型ield event.plain_result("? 用法：/取款 100")
             return
         
         result = await self.bank_service.withdraw(user_id, amount)
@@ -2042,7 +2046,7 @@ class EconomyPlugin(Star):
             if count <= 0:
                 raise ValueError()
         except Exception as e:
-            c  # 修复：添加具体异常类型ount = 1
+            pass  # 修复：原变量c未定义：添加具体异常类型ount = 1
         
         result = await self.shop_service.buy_item(user_id, item_name, count)
         if not result["success"]:
@@ -2102,7 +2106,7 @@ class EconomyPlugin(Star):
             if quantity <= 0:
                 raise ValueError()
         except Exception as e:
-            y  # 修复：添加具体异常类型ield event.plain_result("? 请输入有效的数量！")
+            pass  # 修复：原变量y未定义：添加具体异常类型ield event.plain_result("? 请输入有效的数量！")
             return
 
         # 获取好感值商品配置
@@ -2212,7 +2216,7 @@ class EconomyPlugin(Star):
             if quantity <= 0:
                 raise ValueError()
         except Exception as e:
-            q  # 修复：添加具体异常类型uantity = 1
+            pass  # 修复：原变量q未定义：添加具体异常类型uantity = 1
         
         # 获取好感值商品列表
         favor_items = self.favor_system.get_favor_items()
@@ -2546,7 +2550,7 @@ class EconomyPlugin(Star):
             if quantity <= 0:
                 raise ValueError()
         except Exception as e:
-            y  # 修复：添加具体异常类型ield event.plain_result("? 数量格式错误")
+            pass  # 修复：原变量y未定义：添加具体异常类型ield event.plain_result("? 数量格式错误")
             return
         
         result = await self.stock_service.buy_stock(user_id, stock_name, quantity)
@@ -2580,7 +2584,7 @@ class EconomyPlugin(Star):
             if want_sell <= 0:
                 raise ValueError()
         except Exception as e:
-            y  # 修复：添加具体异常类型ield event.plain_result("? 数量格式错误")
+            pass  # 修复：原变量y未定义：添加具体异常类型ield event.plain_result("? 数量格式错误")
             return
         
         result = await self.stock_service.sell_stock(user_id, stock_name, want_sell)
@@ -2646,7 +2650,7 @@ class EconomyPlugin(Star):
             if init_price < 1 or init_price > 10000:
                 raise ValueError()
         except Exception as e:
-            y  # 修复：添加具体异常类型ield event.plain_result("? 初始股价需在1-10000之间")
+            pass  # 修复：原变量y未定义：添加具体异常类型ield event.plain_result("? 初始股价需在1-10000之间")
             return
         
         desc = " ".join(parts[3:]) if len(parts) > 3 else "玩家创立的企业"
@@ -2707,7 +2711,7 @@ class EconomyPlugin(Star):
             if amount < 10000:
                 raise ValueError()
         except Exception as e:
-            y  # 修复：添加具体异常类型ield event.plain_result("? 研发资金至少10000星声")
+            pass  # 修复：原变量y未定义：添加具体异常类型ield event.plain_result("? 研发资金至少10000星声")
             return
         
         result = await self.stock_service.research(user_id, company_name, amount)

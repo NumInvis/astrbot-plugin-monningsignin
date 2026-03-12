@@ -7,6 +7,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import aiosqlite
 from datetime import datetime
 from config import CONFIG
+from astrbot.api import logger
 
 
 def today_str() -> str:
