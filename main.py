@@ -1188,21 +1188,21 @@ class EconomyPlugin(Star):
             yield event.plain_result("🎁 暂无资产数据")
             return
         
-        medals = ["🎁", "🎁", "🎁", "4🎁", "5🎁", "6🎁", "7🎁", "8🎁", "9🎁", "🎁"]
+        medals = ["🥇", "🥈", "🥉", "4️⃣", "5️⃣", "6️⃣", "7️⃣", "8️⃣", "9️⃣", "🔟"]
         lines = ["🏆 资产排行榜 Top 10", "═══════════════════"]
-        
+
         for i, (uid, total) in enumerate(sorted_assets[:10]):
             medal = medals[i] if i < len(medals) else f"{i+1}."
             name = name_map.get(uid, mask_id(uid))
             is_self = uid == user_id
             name_display = f"{name} (你)" if is_self else name
-            
+
             # 获取详细资产
             _, cash, bank, stock = await self._get_user_asset(uid)
-            
-            lines.append(f"{medal} 🎁 {name_display}")
+
+            lines.append(f"{medal} {name_display}")
             lines.append(f"   💰 总资产：{format_num(total)} 星声")
-            lines.append(f"   🎁 {format_num(cash)} | 🎁 {format_num(bank)} | 🎁 {format_num(stock)}")
+            lines.append(f"   💵 {format_num(cash)} | 🏦 {format_num(bank)} | 📈 {format_num(stock)}")
             if i < 9:
                 lines.append("")
         
@@ -1219,7 +1219,7 @@ class EconomyPlugin(Star):
                 "═══════════════════",
                 f"💡 我的排名：第 {my_rank} 名",
                 f"💰 总资产：{format_num(my_total)} 星声",
-                f"🎁 {format_num(my_cash)} | 🎁 {format_num(my_bank)} | 🎁 {format_num(my_stock)}"
+                f"💵 {format_num(my_cash)} | 🏦 {format_num(my_bank)} | 📈 {format_num(my_stock)}"
             ])
         
         # 添加税收信息

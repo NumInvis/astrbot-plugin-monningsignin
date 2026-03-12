@@ -31,10 +31,11 @@ def mask_id(uid: str) -> str:
 
 class StockService:
     """股票服务类"""
-    
+
     def __init__(self, db_path: str):
         self.db_path = db_path
-        self.market_sentiment = "中立"  # 恐慌-悲观-中立-乐观-贪婪
+        # 每个股票独立的市场情绪
+        self.stock_sentiments = {}  # {stock_name: sentiment}
         self.last_sentiment_update = datetime.now()
         self.sentiment_update_interval = random.randint(3600, 43200)  # 1h-12h
         self.last_market_update = datetime.now()
@@ -42,21 +43,21 @@ class StockService:
         # 启动市场更新任务
         asyncio.create_task(self._market_update_task())
         asyncio.create_task(self._sentiment_update_task())
-    
+
     async def _market_update_task(self):
         """市场更新任务"""
         while True:
             await asyncio.sleep(self.market_update_interval)
             await self._update_market_prices()
-    
+
     async def _sentiment_update_task(self):
         """市场情绪更新任务"""
         while True:
             await asyncio.sleep(self.sentiment_update_interval)
-            await self._update_market_sentiment()
+            await self._update_stock_sentiments()
             # 随机下次更新时间
             self.sentiment_update_interval = random.randint(3600, 43200)
-    
+
     async def _update_market_prices(self):
         """更新市场价格"""
         async with aiosqlite.connect(self.db_path) as db:
@@ -70,53 +71,72 @@ class StockService:
                     FOREIGN KEY (stock_name) REFERENCES stock_prices(stock_name)
                 )
             """)
-            
+
             cursor = await db.execute(
                 "SELECT stock_name, current_price FROM stock_prices WHERE delisted = 0"
             )
             stocks = await cursor.fetchall()
-            
+
             for stock_name, current_price in stocks:
-                # 根据市场情绪调整波动幅度
-                if self.market_sentiment == "恐慌":
-                    change = random.uniform(-0.05, -0.01)
-                elif self.market_sentiment == "悲观":
-                    change = random.uniform(-0.03, 0.01)
-                elif self.market_sentiment == "中立":
-                    change = random.uniform(-0.02, 0.02)
-                elif self.market_sentiment == "乐观":
-                    change = random.uniform(-0.01, 0.03)
-                elif self.market_sentiment == "贪婪":
-                    change = random.uniform(0.01, 0.05)
-                
+                # 获取该股票的独立市场情绪（默认为中立）
+                sentiment = self.stock_sentiments.get(stock_name, "中立")
+
+                # 根据市场情绪调整波动幅度（已削弱影响）
+                if sentiment == "恐慌":
+                    change = random.uniform(-0.03, -0.005)  # 原来是 -0.05 ~ -0.01
+                elif sentiment == "悲观":
+                    change = random.uniform(-0.02, 0.005)   # 原来是 -0.03 ~ 0.01
+                elif sentiment == "中立":
+                    change = random.uniform(-0.015, 0.015)  # 原来是 -0.02 ~ 0.02
+                elif sentiment == "乐观":
+                    change = random.uniform(-0.005, 0.02)   # 原来是 -0.01 ~ 0.03
+                elif sentiment == "贪婪":
+                    change = random.uniform(0.005, 0.03)    # 原来是 0.01 ~ 0.05
+
                 new_price = current_price * (1 + change)
-                
+
                 # 更新当前价格
                 await db.execute(
                     "UPDATE stock_prices SET current_price = ?, last_update = ? WHERE stock_name = ?",
                     (new_price, now_str(), stock_name)
                 )
-                
+
                 # 保存历史价格
                 await db.execute(
                     "INSERT INTO stock_price_history (stock_name, price, timestamp) VALUES (?, ?, ?)",
                     (stock_name, new_price, now_str())
                 )
-            
+
             await db.commit()
-    
-    async def _update_market_sentiment(self):
-        """更新市场情绪"""
-        sentiments = ["恐慌", "悲观", "中立", "乐观", "贪婪"]
-        self.market_sentiment = random.choice(sentiments)
+
+    async def _update_stock_sentiments(self):
+        """更新每个股票的独立市场情绪"""
+        async with aiosqlite.connect(self.db_path) as db:
+            cursor = await db.execute(
+                "SELECT stock_name FROM stock_prices WHERE delisted = 0"
+            )
+            stocks = await cursor.fetchall()
+
+            sentiments = ["恐慌", "悲观", "中立", "乐观", "贪婪"]
+            for (stock_name,) in stocks:
+                # 每个股票独立随机选择情绪
+                self.stock_sentiments[stock_name] = random.choice(sentiments)
+
         self.last_sentiment_update = datetime.now()
-    
-    async def get_market_sentiment(self):
-        """获取当前市场情绪"""
+
+    async def get_stock_sentiment(self, stock_name: str) -> str:
+        """获取指定股票的市场情绪"""
         # 检查是否需要更新
         if (datetime.now() - self.last_sentiment_update).total_seconds() > self.sentiment_update_interval:
-            await self._update_market_sentiment()
-        return self.market_sentiment
+            await self._update_stock_sentiments()
+        return self.stock_sentiments.get(stock_name, "中立")
+
+    async def get_all_sentiments(self) -> dict:
+        """获取所有股票的市场情绪"""
+        # 检查是否需要更新
+        if (datetime.now() - self.last_sentiment_update).total_seconds() > self.sentiment_update_interval:
+            await self._update_stock_sentiments()
+        return self.stock_sentiments.copy()
     
     async def get_stock_market(self) -> list:
         """获取股市行情"""
