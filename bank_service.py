@@ -116,36 +116,49 @@ class BankService:
     
     async def deposit(self, user_id: str, amount: int) -> dict:
         """存款"""
-        # 检查余额
+        # 使用事务原子操作检查余额并存款
         async with aiosqlite.connect(self.db_path) as db:
-            cursor = await db.execute(
-                "SELECT balance FROM users WHERE user_id = ?",
-                (user_id,)
-            )
-            row = await cursor.fetchone()
-            if not row:
-                return {"success": False, "message": "用户不存在"}
-            
+            await db.execute("BEGIN IMMEDIATE")
             try:
-                balance = int(row[0]) if row[0] else 0
-            except (ValueError, TypeError):
-                balance = 0
-            
-            if balance < amount:
-                return {"success": False, "message": f"抽卡资源不足！当前：{format_num(balance)}星声"}
-        
-        # 更新利息并存款
-        bank, rate = await self.update_bank_interest(user_id)
-        new_bank = bank + amount
-        new_cash = balance - amount
-        rate_pct = int(rate * 100)
-        
-        async with aiosqlite.connect(self.db_path) as db:
-            await db.execute(
-                "UPDATE users SET balance = ?, bank_balance = ?, bank_last_date = ? WHERE user_id = ?",
-                (new_cash, new_bank, today_str(), user_id)
-            )
-            await db.commit()
+                # 检查余额
+                cursor = await db.execute(
+                    "SELECT balance, bank_balance FROM users WHERE user_id = ?",
+                    (user_id,)
+                )
+                row = await cursor.fetchone()
+                if not row:
+                    await db.execute("ROLLBACK")
+                    return {"success": False, "message": "用户不存在"}
+                
+                try:
+                    balance = int(row[0]) if row[0] else 0
+                    bank = int(row[1]) if row[1] else 0
+                except (ValueError, TypeError):
+                    balance = 0
+                    bank = 0
+                
+                if balance < amount:
+                    await db.execute("ROLLBACK")
+                    return {"success": False, "message": f"抽卡资源不足！当前：{format_num(balance)}星声"}
+                
+                # 计算利息
+                rate = await self._get_rate(db, user_id)
+                bank, _ = await self._calc_interest(db, user_id, bank, rate)
+                
+                # 执行存款
+                new_bank = bank + amount
+                new_cash = balance - amount
+                rate_pct = int(rate * 100)
+                
+                await db.execute(
+                    "UPDATE users SET balance = ?, bank_balance = ?, bank_last_date = ? WHERE user_id = ?",
+                    (new_cash, new_bank, today_str(), user_id)
+                )
+                await db.execute("COMMIT")
+            except Exception as e:
+                await db.execute("ROLLBACK")
+                logger.error(f"存款失败: {e}")
+                return {"success": False, "message": "存款失败，请稍后重试"}
         
         has_vip = await self.has_vip_card(user_id)
         

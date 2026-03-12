@@ -817,10 +817,19 @@ class EconomyPlugin(Star):
             if ratio > 1:
                 lines.append(f"⚖️ 贫富差距指数：{ratio:.1f}（调节税+{extra_rate*100:.1f}%）")
         
+        # 重新查询最终余额（塔罗牌效果可能已修改余额）
+        async with aiosqlite.connect(self.db_path) as db:
+            cursor = await db.execute(
+                "SELECT balance FROM users WHERE user_id = ?",
+                (user_id,)
+            )
+            row = await cursor.fetchone()
+            final_balance = row[0] if row else new_balance
+        
         lines.extend([
             "═══════════════════",
             f"💰 共计：{total}星声",
-            f"💰 余额：{format_num(new_balance)}星声"
+            f"💰 余额：{format_num(final_balance)}星声"
         ])
         
         if tarot_msg:
@@ -1117,28 +1126,50 @@ class EconomyPlugin(Star):
             yield event.plain_result("? 不能给自己转账！")
             return
         
-        sender = await self._get_user(sender_id)
-        if sender["balance"] < amount:
-            yield event.plain_result(f"? 余额不足！当前：{format_num(sender['balance'])}星声")
-            return
-        
+        # 使用原子操作检查并扣减余额，防止并发透支
         async with aiosqlite.connect(self.db_path) as db:
-            await db.execute(
-                "UPDATE users SET balance = balance - ? WHERE user_id = ?",
-                (amount, sender_id)
-            )
-            await db.execute(
-                """INSERT INTO users (user_id, balance) VALUES (?, ?)
-                   ON CONFLICT(user_id) DO UPDATE SET balance = balance + ?""",
-                (target_id, amount, amount)
-            )
-            await db.commit()
+            # 开启事务
+            await db.execute("BEGIN IMMEDIATE")
+            try:
+                # 检查余额并扣减（原子操作）
+                cursor = await db.execute(
+                    "SELECT balance FROM users WHERE user_id = ?",
+                    (sender_id,)
+                )
+                row = await cursor.fetchone()
+                sender_balance = row[0] if row else 0
+                
+                if sender_balance < amount:
+                    await db.execute("ROLLBACK")
+                    yield event.plain_result(f"? 余额不足！当前：{format_num(sender_balance)}星声")
+                    return
+                
+                # 扣减发送者余额
+                await db.execute(
+                    "UPDATE users SET balance = balance - ? WHERE user_id = ?",
+                    (amount, sender_id)
+                )
+                
+                # 增加接收者余额
+                await db.execute(
+                    """INSERT INTO users (user_id, balance) VALUES (?, ?)
+                       ON CONFLICT(user_id) DO UPDATE SET balance = balance + ?""",
+                    (target_id, amount, amount)
+                )
+                
+                await db.execute("COMMIT")
+                new_balance = sender_balance - amount
+            except Exception as e:
+                await db.execute("ROLLBACK")
+                logger.error(f"转账失败: {e}")
+                yield event.plain_result("? 转账失败，请稍后重试")
+                return
         
         yield event.plain_result(
             f"⛔ 转账成功！\n"
             f"🎁 转出：{format_num(amount)}星声\n"
             f"👤 给：{mask_id(target_id)}\n"
-            f"🎁 您剩余：{format_num(sender['balance'] - amount)}星声"
+            f"🎁 您剩余：{format_num(new_balance)}星声"
         )
     
     @filter.command("资产排行榜")
