@@ -2832,7 +2832,9 @@ class EconomyPlugin(Star):
             from astrbot.api.message_components import Image, Plain
             yield event.chain_result([Plain(f"{result['stock_name']} 价格走势"), Image.fromBytes(image_bytes)])
         except Exception as e:
+            import traceback
             logger.error(f"生成股票图表失败: {e}")
+            logger.error(f"异常详情: {traceback.format_exc()}")
             # 如果图片生成失败，回退到文本显示
             if not price_data:
                 yield event.plain_result(f"{result['stock_name']}\n暂无价格数据")
@@ -2840,7 +2842,8 @@ class EconomyPlugin(Star):
             prices = [d['price'] for d in price_data]
             yield event.plain_result(
                 f"{result['stock_name']} 价格走势\n"
-                f"当前: {prices[-1]:.2f}"
+                f"当前: {prices[-1]:.2f}\n"
+                f"(图片生成失败: {e})"
             )
     
     # ============== 结社系统 ==============
