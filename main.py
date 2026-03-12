@@ -2791,18 +2791,19 @@ class EconomyPlugin(Star):
     
     @filter.command("k线")
     async def cmd_stock_kline(self, event: AstrMessageEvent):
-        """查看股票价格走势（生成图片）"""
+        """查看股票价格走势（生成图片，显示持仓）"""
         await self._ensure_db()
 
         user_id = str(event.get_sender_id())
         parts = event.message_str.split()
 
         if len(parts) < 2:
-            yield event.plain_result("💡 用法：/k线 股票名")
+            yield event.plain_result("用法：/k线 股票名")
             return
 
         stock_name = parts[1]
 
+        # 获取价格数据
         result = await self.stock_service.get_stock_kline(stock_name)
         if not result["success"]:
             yield event.plain_result(result["message"])
@@ -2810,26 +2811,36 @@ class EconomyPlugin(Star):
 
         price_data = result.get("price_data", [])
 
+        # 获取用户持仓信息
+        user_holdings = None
+        try:
+            holding_details = await self.stock_service.get_stock_holding_details(user_id, stock_name)
+            if holding_details.get("has_holding"):
+                user_holdings = {
+                    "total_quantity": holding_details["total_quantity"],
+                    "avg_price": holding_details["avg_price"],
+                    "buy_points": holding_details["buy_points"],
+                    "sell_points": holding_details["sell_points"]
+                }
+        except Exception as e:
+            logger.warning(f"获取持仓信息失败: {e}")
+
         # 生成图片
         try:
-            image_bytes = generate_stock_chart(result['stock_name'], price_data)
+            image_bytes = generate_stock_chart(result['stock_name'], price_data, user_holdings)
             # 使用 AstrBot 的 Image 组件发送图片
             from astrbot.api.message_components import Image, Plain
-            yield event.chain_result([Plain(f"📈 {result['stock_name']} 最近24小时价格走势"), Image.fromBytes(image_bytes)])
+            yield event.chain_result([Plain(f"{result['stock_name']} 价格走势"), Image.fromBytes(image_bytes)])
         except Exception as e:
             logger.error(f"生成股票图表失败: {e}")
             # 如果图片生成失败，回退到文本显示
             if not price_data:
-                yield event.plain_result(f"📈 {result['stock_name']}\n暂无价格数据")
+                yield event.plain_result(f"{result['stock_name']}\n暂无价格数据")
                 return
             prices = [d['price'] for d in price_data]
             yield event.plain_result(
-                f"📈 {result['stock_name']} 最近24小时价格走势\n"
-                f"═══════════════════\n"
-                f"📊 数据点: {len(price_data)}个\n"
-                f"💰 当前: {prices[-1]:.2f}\n"
-                f"📈 最高: {max(prices):.2f}\n"
-                f"📉 最低: {min(prices):.2f}"
+                f"{result['stock_name']} 价格走势\n"
+                f"当前: {prices[-1]:.2f}"
             )
     
     # ============== 结社系统 ==============

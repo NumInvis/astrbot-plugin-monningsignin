@@ -850,6 +850,61 @@ class StockService:
             "stock_name": stock_name,
             "price_data": price_data
         }
+
+    async def get_stock_holding_details(self, user_id: str, stock_name: str) -> dict:
+        """获取用户在特定股票的持仓详情（用于图表显示）"""
+        async with aiosqlite.connect(self.db_path) as db:
+            # 获取当前持仓
+            cursor = await db.execute(
+                "SELECT SUM(remaining), AVG(buy_price) FROM stock_holdings WHERE user_id = ? AND stock_name = ? AND remaining > 0",
+                (user_id, stock_name)
+            )
+            row = await cursor.fetchone()
+            
+            total_quantity = row[0] if row and row[0] else 0
+            avg_price = row[1] if row and row[1] else 0
+            
+            if total_quantity == 0:
+                return {
+                    "has_holding": False,
+                    "total_quantity": 0,
+                    "avg_price": 0,
+                    "buy_points": [],
+                    "sell_points": []
+                }
+            
+            # 获取买入记录（用于标记买入点）
+            cursor = await db.execute(
+                """SELECT buy_price, buy_time 
+                   FROM stock_holdings 
+                   WHERE user_id = ? AND stock_name = ? AND remaining > 0
+                   ORDER BY buy_time ASC""",
+                (user_id, stock_name)
+            )
+            buy_records = await cursor.fetchall()
+            
+            # 获取卖出记录（用于标记卖出点）
+            cursor = await db.execute(
+                """SELECT sell_price, sell_time 
+                   FROM stock_transactions 
+                   WHERE user_id = ? AND stock_name = ? AND transaction_type = 'sell'
+                   AND sell_time >= datetime('now', '-24 hours')
+                   ORDER BY sell_time ASC""",
+                (user_id, stock_name)
+            )
+            sell_records = await cursor.fetchall()
+            
+            # 构建买入点和卖出点
+            buy_points = [price for price, _ in buy_records]
+            sell_points = [price for price, _ in sell_records]
+            
+            return {
+                "has_holding": True,
+                "total_quantity": total_quantity,
+                "avg_price": avg_price,
+                "buy_points": buy_points,
+                "sell_points": sell_points
+            }
     
     async def get_price_history(self, stock_name: str) -> dict:
         """获取股票最近24小时的价格历史（每10分钟一个点）"""
