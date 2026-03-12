@@ -227,6 +227,17 @@ class DBManager:
                     last_dividend_date TEXT
                 )
             """)
+
+            # 股票价格历史表
+            await db.execute("""
+                CREATE TABLE IF NOT EXISTS stock_price_history (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    stock_name TEXT,
+                    price REAL,
+                    timestamp TEXT,
+                    FOREIGN KEY (stock_name) REFERENCES stock_prices(stock_name)
+                )
+            """)
             
             # 成就表 - 使用CREATE TABLE IF NOT EXISTS确保表存在但不删除
             await db.execute("""
