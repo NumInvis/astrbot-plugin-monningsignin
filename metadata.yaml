@@ -1,5 +1,12 @@
-name: astrbot_plugin_signin
+name: astrbot_plugin_monningsignin
 desc: 一个有趣而有深度的经济+好感度系统
 help: /签到帮助
 version: v2.0.1
 author: NumInvis
+repo: https://github.com/NumInvis/astrbot-plugin-monningsignin
+tags:
+  - 经济
+  - 好感度
+  - 世界观
+  - 股票
+social_link: https://github.com/NumInvis
