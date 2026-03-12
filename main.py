@@ -563,7 +563,7 @@ class EconomyPlugin(Star):
         if not signin_result["success"]:
             yield event.plain_result(
                 f"⛔ {signin_result['message']}\n"
-                f"💰 当前余额：{format_num(signin_result['balance'])} 星声\n"
+                f"[钱袋] 当前余额：{format_num(signin_result['balance'])} 星声\n"
                 f"[日历] 连续签到：{signin_result['consecutive_days']} 天"
             )
             return
@@ -811,11 +811,11 @@ class EconomyPlugin(Star):
         if tax_result and len(tax_result) >= 5:
             _, _, _, extra_rate, ratio = tax_result
             if ratio > 1:
-                lines.append(f"⚖️ 贫富差距指数：{ratio:.1f}（调节税+{extra_rate*100:.1f}%）")
+                lines.append(f"[天平] 贫富差距指数：{ratio:.1f}（调节税+{extra_rate*100:.1f}%）")
         
         lines.extend([
             "═══════════════════",
-            f"💰 共计：{total}星声",
+            f"[钱袋] 共计：{total}星声",
             f"[金币] 余额：{format_num(new_balance)}星声"
         ])
         
@@ -829,7 +829,7 @@ class EconomyPlugin(Star):
         """经济系统帮助"""
         help_text = """[剪贴板] 指令列表
 
-💰 基础：/签到 /余额 /转账 @用户 金额 /资产排行榜 /经济 /税收
+[钱袋] 基础：/签到 /余额 /转账 @用户 金额 /资产排行榜 /经济 /税收
 [银行] 银行：/银行 /存款 金额 /取款 金额
 [商店] 商店：/商店 /购买 商品 数量 /背包 /使用 物品 /占卜概率 /Allin
 [公文包] 工作：/找工作 /应聘 工作名 /工作状态 /领工资
@@ -837,7 +837,7 @@ class EconomyPlugin(Star):
 [古典建筑]️ 结社：/结社 /加入结社 名称 /我的结社
 [爱心] 好感：/好感度 /好感度排行
 [奖杯] 成就：/成就 /塔罗牌
-🔧 管理：/高级签到帮助"""
+[扳手] 管理：/高级签到帮助"""
         yield event.plain_result(help_text)
     
     @filter.command("高级签到帮助")
@@ -850,7 +850,7 @@ class EconomyPlugin(Star):
             yield event.plain_result("? 权限不足！此命令仅管理员可用")
             return
         
-        help_text = """🔧 管理员指令
+        help_text = """[扳手] 管理员指令
 
 系统：/admin reset 用户 /admin add 用户 金额 /admin remove 用户 金额 /admin clear
 统计：/admin stats /admin users /admin logs
@@ -1070,11 +1070,11 @@ class EconomyPlugin(Star):
         favor_info = f"\n[爱心] 好感值：{favor_value}  好感度：{favor_level}"
 
         msg = (
-            f"👤 [{nickname}] 的资产\n"
+            f"[用户] [{nickname}] 的资产\n"
             f"[美元] 抽卡资源：{format_num(cash)} 星声\n"
             f"[银行] 存款：{format_num(bank)} 星声\n"
             f"[上涨] 股票：{format_num(stock)} 星声\n"
-            f"💰 总资产：{format_num(total)} 星声\n"
+            f"[钱袋] 总资产：{format_num(total)} 星声\n"
             f"[日历] 连续签到：{user['consecutive_days']}天\n"
             f"[剪贴板] 状态：{status}{favor_info}"
         )
@@ -1133,7 +1133,7 @@ class EconomyPlugin(Star):
         yield event.plain_result(
             f"⛔ 转账成功！\n"
             f"[礼物] 转出：{format_num(amount)}星声\n"
-            f"👤 给：{mask_id(target_id)}\n"
+            f"[用户] 给：{mask_id(target_id)}\n"
             f"[礼物] 您剩余：{format_num(sender['balance'] - amount)}星声"
         )
     
@@ -1158,7 +1158,7 @@ class EconomyPlugin(Star):
             yield event.plain_result("[礼物] 暂无资产数据")
             return
         
-        medals = ["[金牌]", "[银牌]", "[铜牌]", "4️⃣", "5️⃣", "6️⃣", "7️⃣", "8️⃣", "9️⃣", "[10]"]
+        medals = ["[金牌]", "[银牌]", "[铜牌]", "4️⃣", "5️⃣", "6️⃣", "7️⃣", "[8]", "[9]", "[10]"]
         lines = ["[奖杯] 资产排行榜 Top 10", "═══════════════════"]
 
         for i, (uid, total) in enumerate(sorted_assets[:10]):
@@ -1171,7 +1171,7 @@ class EconomyPlugin(Star):
             _, cash, bank, stock = await self._get_user_asset(uid)
 
             lines.append(f"{medal} {name_display}")
-            lines.append(f"   💰 总资产：{format_num(total)} 星声")
+            lines.append(f"   [钱袋] 总资产：{format_num(total)} 星声")
             lines.append(f"   [美元] {format_num(cash)} | [银行] {format_num(bank)} | [上涨] {format_num(stock)}")
             if i < 9:
                 lines.append("")
@@ -1188,7 +1188,7 @@ class EconomyPlugin(Star):
             lines.extend([
                 "═══════════════════",
                 f"[灯泡] 我的排名：第 {my_rank} 名",
-                f"💰 总资产：{format_num(my_total)} 星声",
+                f"[钱袋] 总资产：{format_num(my_total)} 星声",
                 f"[美元] {format_num(my_cash)} | [银行] {format_num(my_bank)} | [上涨] {format_num(my_stock)}"
             ])
         
@@ -1200,7 +1200,7 @@ class EconomyPlugin(Star):
             )
             row = await cursor.fetchone()
             if row:
-                lines.append(f"\n⚖️ 贫富差距r={row[2]:.1f} | [古典建筑]️ 税:{format_num(row[0])} | 奖池:{format_num(row[1])}")
+                lines.append(f"\n[天平] 贫富差距r={row[2]:.1f} | [古典建筑]️ 税:{format_num(row[0])} | 奖池:{format_num(row[1])}")
         
         yield event.plain_result("\n".join(lines))
     
@@ -1274,7 +1274,7 @@ class EconomyPlugin(Star):
         lines = [
             f"[图表] 索拉里斯宏观经济报告（S{CONFIG.CURRENT_SEASON}赛季）",
             "═══════════════════",
-            f"💰 总资产：{format_num(int(latest[1]))} 星声",
+            f"[钱袋] 总资产：{format_num(int(latest[1]))} 星声",
             f"[用户组] 玩家数：{int(latest[2])} 人",
             f"[美元] 人均资产：{format_num(int(latest[3]))} 星声",
             f"[下跌] 基尼系数：{gini:.3f}",
@@ -1316,14 +1316,14 @@ class EconomyPlugin(Star):
         msg = (
             f"[古典建筑]️ 富豪税与贫富差距报告\n"
             f"═══════════════════\n"
-            f"💰 总收税：{format_num(total)}星声\n"
+            f"[钱袋] 总收税：{format_num(total)}星声\n"
             f"[礼物] 今日奖池：{format_num(bonus)}星声\n"
             f"⛔ 已领取：{format_num(claimed)}星声\n"
             f"[包裹] 剩余：{format_num(remaining)}星声\n"
         )
         
         if gap_ratio and gap_ratio > 1:
-            msg += f"⚖️ 贫富差距指数 r={gap_ratio:.2f}\n"
+            msg += f"[天平] 贫富差距指数 r={gap_ratio:.2f}\n"
             msg += f"[图表] 调节税率：+{extra_rate*100:.1f}%\n"
         
         # 显示税率信息
@@ -2015,7 +2015,7 @@ class EconomyPlugin(Star):
         for name, info in items.items():
             limit = f"（每日限购{info['daily_limit']}次）" if info['daily_limit'] > 0 else "（永久有效）"
             lines.append(f"[包裹] {name}")
-            lines.append(f"💰 价格：{format_num(info['price'])}星声{limit}")
+            lines.append(f"[钱袋] 价格：{format_num(info['price'])}星声{limit}")
             lines.append(f"[笔记] {info['desc']}")
             lines.append("")
         
@@ -2924,12 +2924,12 @@ class EconomyPlugin(Star):
         msg_text = event.message_str
         args = msg_text.split(maxsplit=1)
         if len(args) < 2:
-            yield event.plain_result("📢 请输入公告内容：/发布公告 <内容>")
+            yield event.plain_result("[喇叭] 请输入公告内容：/发布公告 <内容>")
             return
         
         content = args[1].strip()
         if not content:
-            yield event.plain_result("📢 公告内容不能为空！")
+            yield event.plain_result("[喇叭] 公告内容不能为空！")
             return
         
         # 发布公告到数据库
@@ -2942,14 +2942,14 @@ class EconomyPlugin(Star):
         )
         
         if not result["success"]:
-            yield event.plain_result(f"📢 发布公告失败：{result.get('message', '未知错误')}")
+            yield event.plain_result(f"[喇叭] 发布公告失败：{result.get('message', '未知错误')}")
             return
         
         # 广播到所有群
         broadcast_result = await self._broadcast_announcement(event, content)
         
         yield event.plain_result(
-            f"📢 公告发布成功！\n"
+            f"[喇叭] 公告发布成功！\n"
             f"内容：{content[:50]}{'...' if len(content) > 50 else ''}\n"
             f"广播结果：成功 {broadcast_result['success']} 个群，失败 {broadcast_result['failed']} 个群"
         )
@@ -2984,7 +2984,7 @@ class EconomyPlugin(Star):
                                     try:
                                         group_id = int(group_id_str)
                                         # 构造公告消息
-                                        announcement_msg = f"📢【系统公告】📢\n═══════════════════\n{content}\n═══════════════════\n⏰ 发布时间：{datetime.now().strftime('%Y-%m-%d %H:%M')}"
+                                        announcement_msg = f"[喇叭]【系统公告】[喇叭]\n═══════════════════\n{content}\n═══════════════════\n[时钟] 发布时间：{datetime.now().strftime('%Y-%m-%d %H:%M')}"
                                         
                                         # 发送群消息
                                         await bot.api.call_action(
@@ -3011,7 +3011,7 @@ class EconomyPlugin(Star):
                         for group_id_str in whitelist:
                             try:
                                 group_id = int(group_id_str)
-                                announcement_msg = f"📢【系统公告】📢\n═══════════════════\n{content}\n═══════════════════\n⏰ 发布时间：{datetime.now().strftime('%Y-%m-%d %H:%M')}"
+                                announcement_msg = f"[喇叭]【系统公告】[喇叭]\n═══════════════════\n{content}\n═══════════════════\n[时钟] 发布时间：{datetime.now().strftime('%Y-%m-%d %H:%M')}"
                                 
                                 await event.bot.api.call_action(
                                     "send_group_msg",
@@ -3044,16 +3044,16 @@ class EconomyPlugin(Star):
         announcement = await self.announcement_service.get_latest_announcement()
         
         if not announcement:
-            yield event.plain_result("📢 暂无公告")
+            yield event.plain_result("[喇叭] 暂无公告")
             return
         
         lines = [
-            f"📢【{announcement['title']}】📢",
+            f"[喇叭]【{announcement['title']}】[喇叭]",
             "═══════════════════",
             f"{announcement['content']}",
             "═══════════════════",
-            f"👤 发布者：{announcement['author_name']}",
-            f"⏰ 发布时间：{announcement['publish_time']}"
+            f"[用户] 发布者：{announcement['author_name']}",
+            f"[时钟] 发布时间：{announcement['publish_time']}"
         ]
         
         yield event.plain_result("\n".join(lines))
@@ -3067,7 +3067,7 @@ class EconomyPlugin(Star):
         announcements = await self.announcement_service.get_announcements(limit=10)
         
         if not announcements:
-            yield event.plain_result("📢 暂无公告")
+            yield event.plain_result("[喇叭] 暂无公告")
             return
         
         lines = ["[剪贴板]【历史公告列表】[剪贴板]", "═══════════════════"]
@@ -3136,7 +3136,7 @@ class EconomyPlugin(Star):
         elif action == "add":
             # 添加群到白名单
             if len(args) < 3:
-                yield event.plain_result("📢 用法：/公告白名单 add 群号")
+                yield event.plain_result("[喇叭] 用法：/公告白名单 add 群号")
                 return
             
             group_id = args[2].strip()
@@ -3145,7 +3145,7 @@ class EconomyPlugin(Star):
                 return
             
             if group_id in whitelist:
-                yield event.plain_result(f"📢 群 {group_id} 已在白名单中")
+                yield event.plain_result(f"[喇叭] 群 {group_id} 已在白名单中")
                 return
             
             whitelist.append(group_id)
@@ -3154,12 +3154,12 @@ class EconomyPlugin(Star):
         elif action == "remove":
             # 从白名单移除群
             if len(args) < 3:
-                yield event.plain_result("📢 用法：/公告白名单 remove 群号")
+                yield event.plain_result("[喇叭] 用法：/公告白名单 remove 群号")
                 return
             
             group_id = args[2].strip()
             if group_id not in whitelist:
-                yield event.plain_result(f"📢 群 {group_id} 不在白名单中")
+                yield event.plain_result(f"[喇叭] 群 {group_id} 不在白名单中")
                 return
             
             whitelist.remove(group_id)

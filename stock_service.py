@@ -137,7 +137,35 @@ class StockService:
         if (datetime.now() - self.last_sentiment_update).total_seconds() > self.sentiment_update_interval:
             await self._update_stock_sentiments()
         return self.stock_sentiments.copy()
-    
+
+    async def get_market_sentiment(self) -> str:
+        """获取整体市场情绪（用于股市总览）"""
+        # 检查是否需要更新
+        if (datetime.now() - self.last_sentiment_update).total_seconds() > self.sentiment_update_interval:
+            await self._update_stock_sentiments()
+
+        # 统计所有股票的情绪分布
+        sentiments = list(self.stock_sentiments.values())
+        if not sentiments:
+            return "中立"
+
+        # 计算情绪倾向
+        sentiment_scores = {"恐慌": -2, "悲观": -1, "中立": 0, "乐观": 1, "贪婪": 2}
+        total_score = sum(sentiment_scores.get(s, 0) for s in sentiments)
+        avg_score = total_score / len(sentiments)
+
+        # 根据平均分返回整体情绪
+        if avg_score <= -1.5:
+            return "恐慌"
+        elif avg_score <= -0.5:
+            return "悲观"
+        elif avg_score < 0.5:
+            return "中立"
+        elif avg_score < 1.5:
+            return "乐观"
+        else:
+            return "贪婪"
+
     async def get_stock_market(self) -> list:
         """获取股市行情"""
         async with aiosqlite.connect(self.db_path) as db:
