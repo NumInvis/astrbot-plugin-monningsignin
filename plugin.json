@@ -4,8 +4,8 @@
   "description": "一个功能丰富的 AstrBot 经济系统插件，包含签到、银行、商店、股票、工作、结社、成就、好感度等多个子系统",
   "author": "NumInvis",
   "license": "MIT",
-  "homepage": "https://github.com/NumInvis/astrbot-checkin-plugin-monningsignin",
-  "repository": "https://github.com/NumInvis/astrbot-checkin-plugin-monningsignin.git",
+  "homepage": "https://github.com/NumInvis/astrbot-plugin-monningsignin",
+  "repository": "https://github.com/NumInvis/astrbot-plugin-monningsignin.git",
   "keywords": [
     "经济系统",
     "签到",
