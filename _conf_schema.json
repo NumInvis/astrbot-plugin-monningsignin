@@ -1,0 +1,8 @@
+{
+  "admins": {
+    "description": "管理员列表",
+    "hint": "拥有插件管理权限的用户QQ号列表",
+    "type": "list",
+    "default": []
+  }
+}

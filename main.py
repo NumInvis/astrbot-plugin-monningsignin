@@ -50,11 +50,15 @@ from utils import today_str, now_str, mask_id, format_num
 class EconomyPlugin(Star):
     """经济系统主插件"""
 
-    def __init__(self, context: Context):
+    def __init__(self, context: Context, config=None):
         super().__init__(context)
+        self.plugin_config = config  # AstrBot 配置系统
         # 使用 StarTools.get_data_dir() 获取规范的数据存储目录
         data_dir = StarTools.get_data_dir()
         self.db_path = str(data_dir / "signin.db")
+        
+        # 从 AstrBot 配置加载并更新 config.py 中的值
+        self._load_config_from_astrbot()
         
         # 初始化数据库管理器（统一使用DatabaseManager，删除DBManager）
         self.db_manager = DatabaseManager(self.db_path)
@@ -85,6 +89,28 @@ class EconomyPlugin(Star):
         self._init_lock = asyncio.Lock()  # 添加异步锁防止并发初始化
         
         logger.info("【经济系统】插件加载中 v2.0.1")
+    
+    def _load_config_from_astrbot(self):
+        """从 AstrBot 配置系统加载配置"""
+        if self.plugin_config:
+            try:
+                # 读取管理员列表 - 支持多种配置对象格式
+                admins = None
+                if isinstance(self.plugin_config, dict):
+                    admins = self.plugin_config.get('admins')
+                elif hasattr(self.plugin_config, 'admins'):
+                    admins = getattr(self.plugin_config, 'admins')
+                elif hasattr(self.plugin_config, '__getitem__'):
+                    try:
+                        admins = self.plugin_config['admins']
+                    except (KeyError, TypeError):
+                        pass
+                
+                if admins and isinstance(admins, list):
+                    CONFIG.ADMIN_IDS = admins
+                    logger.info(f"【经济系统】从 AstrBot 配置加载了 {len(CONFIG.ADMIN_IDS)} 个管理员")
+            except Exception as e:
+                logger.warning(f"【经济系统】加载 AstrBot 配置失败: {e}")
     
     async def _ensure_db(self):
         """确保数据库初始化（带异步锁防止并发）"""
