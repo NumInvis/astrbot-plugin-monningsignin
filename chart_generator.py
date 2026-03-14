@@ -10,14 +10,41 @@ from typing import List, Dict, Optional
 import os
 PLUGIN_DIR = os.path.dirname(os.path.abspath(__file__))
 FONT_PATHS = [
-    os.path.join(PLUGIN_DIR, "fonts", "NotoSansCJK-Bold.ttc"),
-    os.path.join(PLUGIN_DIR, "fonts", "NotoSansCJK-Regular.ttc"),
+    os.path.join(PLUGIN_DIR, "fonts", "NotoSansCJKsc-Bold.otf"),
+    os.path.join(PLUGIN_DIR, "fonts", "NotoSansCJKsc-Regular.otf"),
     "/usr/share/fonts/truetype/NotoSansCJK-Bold.ttc",
     "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
 ]
 
+# 字体下载标志
+_fonts_checked = False
+
+def _ensure_fonts():
+    """确保字体文件存在，如果不存在则尝试下载"""
+    global _fonts_checked
+    if _fonts_checked:
+        return
+    _fonts_checked = True
+    
+    # 检查是否需要下载字体
+    regular_font = os.path.join(PLUGIN_DIR, "fonts", "NotoSansCJKsc-Regular.otf")
+    bold_font = os.path.join(PLUGIN_DIR, "fonts", "NotoSansCJKsc-Bold.otf")
+    
+    if not os.path.exists(regular_font) or not os.path.exists(bold_font):
+        try:
+            # 尝试导入并运行下载脚本
+            import sys
+            sys.path.insert(0, PLUGIN_DIR)
+            from download_fonts import download_all_fonts
+            download_all_fonts()
+        except Exception as e:
+            print(f"字体下载失败: {e}")
+
 def get_font(font_size=12):
     """获取字体，优先使用插件自带字体"""
+    # 确保字体存在
+    _ensure_fonts()
+    
     for font_path in FONT_PATHS:
         if os.path.exists(font_path):
             try:
@@ -83,12 +110,12 @@ def generate_stock_chart(
     max_price += price_padding
     price_range = max_price - min_price
     
-    # 加载字体
+    # 加载字体 - 优先使用插件自带的中文字体
     try:
-        title_font = ImageFont.truetype("/usr/share/fonts/truetype/NotoSansCJK-Bold.ttc", 24)
-        price_font = ImageFont.truetype("/usr/share/fonts/truetype/NotoSansCJK-Regular.ttc", 16)
-        label_font = ImageFont.truetype("/usr/share/fonts/truetype/NotoSansCJK-Regular.ttc", 12)
-        small_font = ImageFont.truetype("/usr/share/fonts/truetype/NotoSansCJK-Regular.ttc", 10)
+        title_font = ImageFont.truetype(os.path.join(PLUGIN_DIR, "fonts", "NotoSansCJKsc-Bold.otf"), 24)
+        price_font = ImageFont.truetype(os.path.join(PLUGIN_DIR, "fonts", "NotoSansCJKsc-Regular.otf"), 16)
+        label_font = ImageFont.truetype(os.path.join(PLUGIN_DIR, "fonts", "NotoSansCJKsc-Regular.otf"), 12)
+        small_font = ImageFont.truetype(os.path.join(PLUGIN_DIR, "fonts", "NotoSansCJKsc-Regular.otf"), 10)
     except:
         try:
             title_font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", 24)
@@ -235,7 +262,7 @@ def generate_empty_chart(stock_name: str, width: int = 800, height: int = 500) -
     draw = ImageDraw.Draw(img)
 
     try:
-        font = ImageFont.truetype("/usr/share/fonts/truetype/NotoSansCJK-Bold.ttc", 32)
+        font = ImageFont.truetype(os.path.join(PLUGIN_DIR, "fonts", "NotoSansCJKsc-Bold.otf"), 32)
     except:
         try:
             font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", 32)
