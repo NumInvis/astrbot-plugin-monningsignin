@@ -1195,15 +1195,15 @@ class EconomyPlugin(Star):
         
         # 构建显示消息
         lines = [
-            f"🎁 {nickname} 的好感度信息",
-            f"[双心] 好感度：{favor_info['favor_level']:.2f}/520"
+            f"💖 {nickname} 的好感度信息",
+            f"💕 好感度：{favor_info['favor_level']:.2f}/520"
         ]
         
         # 显示AI生成的关系描述
         if rel_info.get('desc'):
-            lines.append(f"[思考] 我们的关系：{rel_info['desc']}")
+            lines.append(f"💭 我们的关系：{rel_info['desc']}")
             if rel_info.get('can_update'):
-                lines.append("[刷新] 关系描述可更新")
+                lines.append("🔄 关系描述可更新")
             else:
                 # 计算剩余时间
                 try:
@@ -1211,11 +1211,11 @@ class EconomyPlugin(Star):
                     next_update = next_update.replace(tzinfo=timezone(timedelta(hours=8)))
                     remaining = next_update - get_beijing_time()
                     remaining_minutes = int(remaining.total_seconds() / 60)
-                    lines.append(f"? 关系更新CD：{remaining_minutes}分钟后可更新")
+                    lines.append(f"⏳ 关系更新CD：{remaining_minutes}分钟后可更新")
                 except Exception as e:
-                    pass  # 修复：原变量l未定义：添加具体异常类型ines.append("? 关系更新CD中")
+                    pass  # 修复：原变量l未定义：添加具体异常类型ines.append("⏳ 关系更新CD中")
         else:
-            lines.append("[思考] 我们的关系：还没有足够的互动记录...")
+            lines.append("💭 我们的关系：还没有足够的互动记录...")
         
         lines.append("\n💡 提示：与我互动可以增加好感度哦～")
         
@@ -1237,8 +1237,8 @@ class EconomyPlugin(Star):
             yield event.plain_result("🎁 暂无好感度数据")
             return
         
-        lines = ["[双心] 好感度排行榜 Top 10", "═══════════════════"]
-        medals = ["🎁", "🎁", "🎁", "4🎁", "5🎁", "6🎁", "7🎁", "8🎁", "9🎁", "🎁"]
+        lines = ["💖 好感度排行榜 Top 10", "═══════════════════"]
+        medals = ["🥇", "🥈", "🥉", "4️⃣", "5️⃣", "6️⃣", "7️⃣", "8️⃣", "9️⃣", "🔟"]
         
         # 获取所有用户的关系描述
         async with aiosqlite.connect(self.db_path) as db:
@@ -1251,7 +1251,7 @@ class EconomyPlugin(Star):
             ai_rel = relationship_map.get(user_info['user_id'])
             
             lines.append(f"{medal} {name}")
-            lines.append(f"   [双心] 好感度：{user_info.get('favor_level', 0)}")
+            lines.append(f"   💕 好感度：{user_info.get('favor_level', 0)}")
             if ai_rel:
                 lines.append(f"   🎁 {ai_rel}")
             if i < 10:
@@ -1281,8 +1281,8 @@ class EconomyPlugin(Star):
             lines.extend([
                 "═══════════════════",
                 f"💡 我的排名：第 {my_rank} 名",
-                f"🎁 我的好感度：{my_info.get('favor_level', 0)}",
-                f"[思考] 我们的关系：{my_ai_rel}"
+                f"💕 我的好感度：{my_info.get('favor_level', 0)}",
+                f"💭 我们的关系：{my_ai_rel}"
             ])
         
         yield event.plain_result("\n".join(lines))
