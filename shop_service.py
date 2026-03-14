@@ -6,16 +6,25 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 import aiosqlite
 import random
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 from config import CONFIG
 
 
+def get_beijing_time() -> datetime:
+    """获取北京时间（UTC+8）"""
+    utc_now = datetime.now(timezone.utc)
+    beijing_tz = timezone(timedelta(hours=8))
+    return utc_now.astimezone(beijing_tz)
+
+
 def today_str() -> str:
-    return datetime.now().strftime("%Y-%m-%d")
+    """获取今天的日期字符串（北京时间）"""
+    return get_beijing_time().strftime("%Y-%m-%d")
 
 
 def now_str() -> str:
-    return datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    """获取当前时间的字符串（北京时间）"""
+    return get_beijing_time().strftime("%Y-%m-%d %H:%M:%S")
 
 
 def format_num(n: int) -> str:

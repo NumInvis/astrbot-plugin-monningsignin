@@ -7,16 +7,25 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import aiosqlite
 import random
 import asyncio
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from config import CONFIG
 
 
+def get_beijing_time() -> datetime:
+    """获取北京时间（UTC+8）"""
+    utc_now = datetime.now(timezone.utc)
+    beijing_tz = timezone(timedelta(hours=8))
+    return utc_now.astimezone(beijing_tz)
+
+
 def today_str() -> str:
-    return datetime.now().strftime("%Y-%m-%d")
+    """获取今天的日期字符串（北京时间）"""
+    return get_beijing_time().strftime("%Y-%m-%d")
 
 
 def now_str() -> str:
-    return datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    """获取当前时间的字符串（北京时间）"""
+    return get_beijing_time().strftime("%Y-%m-%d %H:%M:%S")
 
 
 def format_num(n: int) -> str:
@@ -36,9 +45,9 @@ class StockService:
         self.db_path = db_path
         # 每个股票独立的市场情绪
         self.stock_sentiments = {}  # {stock_name: sentiment}
-        self.last_sentiment_update = datetime.now()
+        self.last_sentiment_update = get_beijing_time()
         self.sentiment_update_interval = random.randint(3600, 43200)  # 1h-12h
-        self.last_market_update = datetime.now()
+        self.last_market_update = get_beijing_time()
         self.market_update_interval = 600  # 10分钟
         # 启动市场更新任务
         asyncio.create_task(self._market_update_task())
@@ -122,26 +131,26 @@ class StockService:
                 # 每个股票独立随机选择情绪
                 self.stock_sentiments[stock_name] = random.choice(sentiments)
 
-        self.last_sentiment_update = datetime.now()
+        self.last_sentiment_update = get_beijing_time()
 
     async def get_stock_sentiment(self, stock_name: str) -> str:
         """获取指定股票的市场情绪"""
         # 检查是否需要更新
-        if (datetime.now() - self.last_sentiment_update).total_seconds() > self.sentiment_update_interval:
+        if (get_beijing_time() - self.last_sentiment_update).total_seconds() > self.sentiment_update_interval:
             await self._update_stock_sentiments()
         return self.stock_sentiments.get(stock_name, "中立")
 
     async def get_all_sentiments(self) -> dict:
         """获取所有股票的市场情绪"""
         # 检查是否需要更新
-        if (datetime.now() - self.last_sentiment_update).total_seconds() > self.sentiment_update_interval:
+        if (get_beijing_time() - self.last_sentiment_update).total_seconds() > self.sentiment_update_interval:
             await self._update_stock_sentiments()
         return self.stock_sentiments.copy()
 
     async def get_market_sentiment(self) -> str:
         """获取整体市场情绪（用于股市总览）"""
         # 检查是否需要更新
-        if (datetime.now() - self.last_sentiment_update).total_seconds() > self.sentiment_update_interval:
+        if (get_beijing_time() - self.last_sentiment_update).total_seconds() > self.sentiment_update_interval:
             await self._update_stock_sentiments()
 
         # 统计所有股票的情绪分布
@@ -494,7 +503,7 @@ class StockService:
             )
             
             # 创始人获得初始股份
-            now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            now = get_beijing_time().strftime("%Y-%m-%d %H:%M:%S")
             
             # 应用金色成就加成：创立公司时额外赠送股份
             cursor = await db.execute(
@@ -851,7 +860,7 @@ class StockService:
             current_price = row[0]
 
             # 获取最近24小时的历史价格数据
-            cutoff_time = (datetime.now() - timedelta(hours=24)).strftime("%Y-%m-%d %H:%M:%S")
+            cutoff_time = (get_beijing_time() - timedelta(hours=24)).strftime("%Y-%m-%d %H:%M:%S")
             cursor = await db.execute(
                 """
                 SELECT price, timestamp
@@ -870,6 +879,7 @@ class StockService:
             ten_min_data = {}
             for price, timestamp_str in history:
                 timestamp = datetime.strptime(timestamp_str, "%Y-%m-%d %H:%M:%S")
+                timestamp = timestamp.replace(tzinfo=timezone(timedelta(hours=8)))
                 # 计算10分钟区间
                 minute_block = (timestamp.minute // 10) * 10
                 time_key = timestamp.strftime(f"%Y-%m-%d %H:{minute_block:02d}")
@@ -964,7 +974,7 @@ class StockService:
             current_price = row[0]
             
             # 获取最近24小时的历史价格数据
-            cutoff_time = (datetime.now() - timedelta(hours=24)).strftime("%Y-%m-%d %H:%M:%S")
+            cutoff_time = (get_beijing_time() - timedelta(hours=24)).strftime("%Y-%m-%d %H:%M:%S")
             cursor = await db.execute(
                 """
                 SELECT price, timestamp 
@@ -983,6 +993,7 @@ class StockService:
             # 将数据按10分钟分组
             for price, timestamp_str in history:
                 timestamp = datetime.strptime(timestamp_str, "%Y-%m-%d %H:%M:%S")
+                timestamp = timestamp.replace(tzinfo=timezone(timedelta(hours=8)))
                 time_key = timestamp.strftime("%m-%d %H:%M")
                 
                 price_data.append({
@@ -993,7 +1004,7 @@ class StockService:
         # 如果没有历史数据或数据不足，生成模拟数据
         if len(price_data) < 10:
             # 基于当前价格生成最近24小时的模拟数据（每10分钟一个点）
-            now = datetime.now()
+            now = get_beijing_time()
             base_price = current_price
             
             for i in range(144, -1, -6):  # 24小时 = 144个10分钟，每小时显示一个点

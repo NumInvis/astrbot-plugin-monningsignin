@@ -3,9 +3,16 @@
 提供系统公告发布、查询和广播功能
 """
 import aiosqlite
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 from typing import List, Dict, Optional
 from astrbot.api import logger
+
+
+def get_beijing_time() -> datetime:
+    """获取北京时间（UTC+8）"""
+    utc_now = datetime.now(timezone.utc)
+    beijing_tz = timezone(timedelta(hours=8))
+    return utc_now.astimezone(beijing_tz)
 
 
 class AnnouncementService:
@@ -35,7 +42,7 @@ class AnnouncementService:
         """发布公告"""
         try:
             async with aiosqlite.connect(self.db_path) as db:
-                now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                now = get_beijing_time().strftime("%Y-%m-%d %H:%M:%S")
                 cursor = await db.execute(
                     """INSERT INTO announcements (title, content, author_id, author_name, publish_time, is_broadcast)
                        VALUES (?, ?, ?, ?, ?, 1)""",

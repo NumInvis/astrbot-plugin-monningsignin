@@ -7,10 +7,18 @@ import sys
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from typing import List, Dict
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 import aiosqlite
 from config import CONFIG
 from achievements import ACHIEVEMENTS
+
+
+def get_beijing_time() -> datetime:
+    """获取北京时间（UTC+8）"""
+    utc_now = datetime.now(timezone.utc)
+    beijing_tz = timezone(timedelta(hours=8))
+    return utc_now.astimezone(beijing_tz)
+
 
 def mask_id(uid: str) -> str:
     if len(uid) <= 4:
@@ -75,7 +83,7 @@ class AdminService:
             # 授予成就
             await db.execute(
                 "INSERT INTO user_achievements (user_id, achievement_id, obtain_time) VALUES (?, ?, ?)",
-                (user_id, achievement_id, datetime.now().strftime("%Y-%m-%d %H:%M:%S"))
+                (user_id, achievement_id, get_beijing_time().strftime("%Y-%m-%d %H:%M:%S"))
             )
             await db.commit()
             return True
@@ -98,7 +106,7 @@ class AdminService:
                     # 授予成就
                     await db.execute(
                         "INSERT INTO user_achievements (user_id, achievement_id, obtain_time) VALUES (?, ?, ?)",
-                        (uid, achievement_id, datetime.now().strftime("%Y-%m-%d %H:%M:%S"))
+                        (uid, achievement_id, get_beijing_time().strftime("%Y-%m-%d %H:%M:%S"))
                     )
                     success_count += 1
             
@@ -136,7 +144,7 @@ class AdminService:
                 """UPDATE stock_prices 
                    SET current_price = base_price, delisted = 0, last_update = ?
                    WHERE owner_id IS NULL""",
-                (datetime.now().strftime("%Y-%m-%d"),)
+                (get_beijing_time().strftime("%Y-%m-%d"),)
             )
             
             # 清空结社

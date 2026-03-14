@@ -7,9 +7,16 @@ import sys
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from typing import Dict, Optional
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 import aiosqlite
 import random
+
+
+def get_beijing_time() -> datetime:
+    """获取北京时间（UTC+8）"""
+    utc_now = datetime.now(timezone.utc)
+    beijing_tz = timezone(timedelta(hours=8))
+    return utc_now.astimezone(beijing_tz)
 
 
 class SigninService:
@@ -20,7 +27,7 @@ class SigninService:
     
     async def signin(self, user_id: str, percentile: float) -> Dict:
         """用户签到"""
-        today = datetime.now().strftime("%Y-%m-%d")
+        today = get_beijing_time().strftime("%Y-%m-%d")
         
         async with aiosqlite.connect(self.db_path) as db:
             # 获取用户信息

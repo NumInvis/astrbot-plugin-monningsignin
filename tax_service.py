@@ -7,9 +7,17 @@ import sys
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from typing import List, Tuple, Optional
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 import aiosqlite
 from config import CONFIG
+
+
+def get_beijing_time() -> datetime:
+    """获取北京时间（UTC+8）"""
+    utc_now = datetime.now(timezone.utc)
+    beijing_tz = timezone(timedelta(hours=8))
+    return utc_now.astimezone(beijing_tz)
+
 
 def mask_id(uid: str) -> str:
     if len(uid) <= 4:
@@ -25,7 +33,7 @@ class TaxService:
     
     async def collect_tax(self) -> Optional[Tuple]:
         """收取每日税收"""
-        today = datetime.now().strftime("%Y-%m-%d")
+        today = get_beijing_time().strftime("%Y-%m-%d")
         
         async with aiosqlite.connect(self.db_path) as db:
             cursor = await db.execute(
@@ -108,7 +116,7 @@ class TaxService:
     
     async def claim_tax_bonus(self, user_id: str) -> Tuple[int, int]:
         """领取税收分红"""
-        today = datetime.now().strftime("%Y-%m-%d")
+        today = get_beijing_time().strftime("%Y-%m-%d")
         
         async with aiosqlite.connect(self.db_path) as db:
             cursor = await db.execute(

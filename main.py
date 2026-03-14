@@ -9,7 +9,7 @@ import math
 import json
 import re
 import asyncio
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from decimal import Decimal, ROUND_DOWN
 from typing import Dict, List, Optional, Tuple, Any
 from dataclasses import dataclass
@@ -44,6 +44,14 @@ from db_manager import DatabaseManager
 from announcement_service import AnnouncementService
 from chart_generator import generate_stock_chart
 from utils import today_str, now_str, mask_id, format_num
+
+
+def get_beijing_time() -> datetime:
+    """获取北京时间（UTC+8）"""
+    utc_now = datetime.now(timezone.utc)
+    beijing_tz = timezone(timedelta(hours=8))
+    return utc_now.astimezone(beijing_tz)
+
 
 # ============== 主插件类 ==============
 @register("astrbot_plugin_signin", "NumInvis", "莫宁宁的币", "2.0.0")
@@ -568,7 +576,7 @@ class EconomyPlugin(Star):
                 
                 await db.execute(
                     "INSERT INTO user_daily_tarot (user_id, date, tarot_card, draw_time) VALUES (?, ?, ?, ?)",
-                    (user_id, today, card, datetime.now().strftime("%Y-%m-%d %H:%M:%S"))
+                    (user_id, today, card, get_beijing_time().strftime("%Y-%m-%d %H:%M:%S"))
                 )
                 await db.commit()
                 
@@ -1198,10 +1206,10 @@ class EconomyPlugin(Star):
                 lines.append("[刷新] 关系描述可更新")
             else:
                 # 计算剩余时间
-                from datetime import datetime
                 try:
                     next_update = datetime.strptime(rel_info['next_update_time'], "%Y-%m-%d %H:%M:%S")
-                    remaining = next_update - datetime.now()
+                    next_update = next_update.replace(tzinfo=timezone(timedelta(hours=8)))
+                    remaining = next_update - get_beijing_time()
                     remaining_minutes = int(remaining.total_seconds() / 60)
                     lines.append(f"? 关系更新CD：{remaining_minutes}分钟后可更新")
                 except Exception as e:
@@ -1462,7 +1470,7 @@ class EconomyPlugin(Star):
             # 重置所有人的今日签到状态
             async with aiosqlite.connect(self.db_path) as db:
                 # 将所有今日签到的用户的last_signin_date设为昨天，允许重新签到
-                yesterday = (datetime.now() - timedelta(days=1)).strftime("%Y-%m-%d")
+                yesterday = (get_beijing_time() - timedelta(days=1)).strftime("%Y-%m-%d")
                 cursor = await db.execute(
                     "UPDATE users SET last_signin_date = ? WHERE last_signin_date = ?",
                     (yesterday, today)
@@ -1490,7 +1498,7 @@ class EconomyPlugin(Star):
             target_user = target
             async with aiosqlite.connect(self.db_path) as db:
                 # 将用户的last_signin_date设为昨天，允许重新签到
-                yesterday = (datetime.now() - timedelta(days=1)).strftime("%Y-%m-%d")
+                yesterday = (get_beijing_time() - timedelta(days=1)).strftime("%Y-%m-%d")
                 await db.execute(
                     "UPDATE users SET last_signin_date = ? WHERE user_id = ? AND last_signin_date = ?",
                     (yesterday, target_user, today)
@@ -2313,7 +2321,7 @@ class EconomyPlugin(Star):
         if result["hours_passed"] > 0:
             msg += f"\n🎁 发送 /领工资 领取{result['hours_passed']}小时工资"
         else:
-            msg += f"\n? 还需工作{60 - datetime.now().minute}分钟可领工资"
+            msg += f"\n? 还需工作{60 - get_beijing_time().minute}分钟可领工资"
         
         yield event.plain_result(msg)
     
@@ -2851,7 +2859,7 @@ class EconomyPlugin(Star):
                                     try:
                                         group_id = int(group_id_str)
                                         # 构造公告消息
-                                        announcement_msg = f"📢【系统公告】📢\n═══════════════════\n{content}\n═══════════════════\n⏰ 发布时间：{datetime.now().strftime('%Y-%m-%d %H:%M')}"
+                                        announcement_msg = f"📢【系统公告】📢\n═══════════════════\n{content}\n═══════════════════\n⏰ 发布时间：{get_beijing_time().strftime('%Y-%m-%d %H:%M')}"
                                         
                                         # 发送群消息
                                         await bot.api.call_action(
@@ -2878,7 +2886,7 @@ class EconomyPlugin(Star):
                         for group_id_str in whitelist:
                             try:
                                 group_id = int(group_id_str)
-                                announcement_msg = f"📢【系统公告】📢\n═══════════════════\n{content}\n═══════════════════\n⏰ 发布时间：{datetime.now().strftime('%Y-%m-%d %H:%M')}"
+                                announcement_msg = f"📢【系统公告】📢\n═══════════════════\n{content}\n═══════════════════\n⏰ 发布时间：{get_beijing_time().strftime('%Y-%m-%d %H:%M')}"
                                 
                                 await event.bot.api.call_action(
                                     "send_group_msg",

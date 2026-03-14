@@ -6,8 +6,15 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 import aiosqlite
 import random
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 from config import CONFIG
+
+
+def get_beijing_time() -> datetime:
+    """获取北京时间（UTC+8）"""
+    utc_now = datetime.now(timezone.utc)
+    beijing_tz = timezone(timedelta(hours=8))
+    return utc_now.astimezone(beijing_tz)
 
 
 def format_num(n: int) -> str:
@@ -50,7 +57,7 @@ class WorkService:
             if balance < price:
                 return {"success": False, "message": f"星声不足！需要{format_num(price)}星声"}
         
-        now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        now = get_beijing_time().strftime("%Y-%m-%d %H:%M:%S")
         
         async with aiosqlite.connect(self.db_path) as db:
             await db.execute(
@@ -91,7 +98,8 @@ class WorkService:
         
         try:
             last_time = datetime.strptime(last_claim_str, "%Y-%m-%d %H:%M:%S")
-            now = datetime.now()
+            last_time = last_time.replace(tzinfo=timezone(timedelta(hours=8)))
+            now = get_beijing_time()
             hours_passed = int((now - last_time).total_seconds() // 3600)
         except:
             hours_passed = 0
@@ -185,7 +193,8 @@ class WorkService:
         
         try:
             last_time = datetime.strptime(last_claim_str, "%Y-%m-%d %H:%M:%S")
-            now = datetime.now()
+            last_time = last_time.replace(tzinfo=timezone(timedelta(hours=8)))
+            now = get_beijing_time()
             hours = int((now - last_time).total_seconds() // 3600)
         except:
             hours = 0

@@ -5,13 +5,21 @@ import sys
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 import aiosqlite
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 from config import CONFIG
 from astrbot.api import logger
 
 
+def get_beijing_time() -> datetime:
+    """获取北京时间（UTC+8）"""
+    utc_now = datetime.now(timezone.utc)
+    beijing_tz = timezone(timedelta(hours=8))
+    return utc_now.astimezone(beijing_tz)
+
+
 def today_str() -> str:
-    return datetime.now().strftime("%Y-%m-%d")
+    """获取今天的日期字符串（北京时间）"""
+    return get_beijing_time().strftime("%Y-%m-%d")
 
 
 def format_num(n: int) -> str:

@@ -11,6 +11,14 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from config import CONFIG
 from utils import today_str, now_str, mask_id
 from astrbot.api import logger
+from datetime import datetime, timedelta, timezone
+
+
+def get_beijing_time() -> datetime:
+    """获取北京时间（UTC+8）"""
+    utc_now = datetime.now(timezone.utc)
+    beijing_tz = timezone(timedelta(hours=8))
+    return utc_now.astimezone(beijing_tz)
 
 
 class FavorSystem:
@@ -230,12 +238,13 @@ class FavorSystem:
             )
             row = await cursor.fetchone()
             
-            now = datetime.now()
+            now = get_beijing_time()
             
             if row and row[1]:
                 # 检查是否在CD中
                 try:
                     next_update = datetime.strptime(row[1], "%Y-%m-%d %H:%M:%S")
+                    next_update = next_update.replace(tzinfo=timezone(timedelta(hours=8)))
                     if now < next_update:
                         remaining = next_update - now
                         remaining_minutes = int(remaining.total_seconds() / 60)
@@ -290,7 +299,8 @@ class FavorSystem:
             
             try:
                 next_update = datetime.strptime(next_update_str, "%Y-%m-%d %H:%M:%S")
-                can_update = datetime.now() >= next_update
+                next_update = next_update.replace(tzinfo=timezone(timedelta(hours=8)))
+                can_update = get_beijing_time() >= next_update
             except:
                 can_update = True
             

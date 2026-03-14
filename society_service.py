@@ -5,7 +5,7 @@ import sys
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 import aiosqlite
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 from config import CONFIG
 
 
@@ -19,8 +19,16 @@ def mask_user_id(uid: str) -> str:
     return uid[:3] + "***" + uid[-2:]
 
 
+def get_beijing_time() -> datetime:
+    """获取北京时间（UTC+8）"""
+    utc_now = datetime.now(timezone.utc)
+    beijing_tz = timezone(timedelta(hours=8))
+    return utc_now.astimezone(beijing_tz)
+
+
 def now_str() -> str:
-    return datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    """获取当前时间的字符串（北京时间）"""
+    return get_beijing_time().strftime("%Y-%m-%d %H:%M:%S")
 
 
 class SocietyService:
@@ -56,7 +64,7 @@ class SocietyService:
             return {"success": False, "message": f"结社不存在！可选：{', '.join(CONFIG.SOCIETIES.keys())}"}
         
         config = CONFIG.SOCIETIES[society_name]
-        now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        now = get_beijing_time().strftime("%Y-%m-%d %H:%M:%S")
         
         async with aiosqlite.connect(self.db_path) as db:
             # 检查冷却
@@ -68,8 +76,9 @@ class SocietyService:
             
             if row and row[0]:
                 last_change = datetime.strptime(row[0], "%Y-%m-%d %H:%M:%S")
-                if (datetime.now() - last_change).total_seconds() < CONFIG.SOCIETY_COOLDOWN * 3600:
-                    remaining = int((CONFIG.SOCIETY_COOLDOWN * 3600 - (datetime.now() - last_change).total_seconds()) / 60)
+                last_change = last_change.replace(tzinfo=timezone(timedelta(hours=8)))
+                if (get_beijing_time() - last_change).total_seconds() < CONFIG.SOCIETY_COOLDOWN * 3600:
+                    remaining = int((CONFIG.SOCIETY_COOLDOWN * 3600 - (get_beijing_time() - last_change).total_seconds()) / 60)
                     return {"success": False, "message": f"⏳ 冷却中！还需 {remaining} 分钟才能更换结社"}
             
             await db.execute(
