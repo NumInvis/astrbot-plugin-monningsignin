@@ -10,22 +10,28 @@ import asyncio
 from datetime import timedelta, timezone
 from config import CONFIG
 from utils import get_beijing_time, today_str, now_str, format_num, mask_id
+from base_service import BaseService
 
 
-class StockService:
+class StockService(BaseService):
     """股票服务类"""
 
     def __init__(self, db_path: str):
-        self.db_path = db_path
+        super().__init__(db_path)
         # 每个股票独立的市场情绪
         self.stock_sentiments = {}  # {stock_name: sentiment}
         self.last_sentiment_update = get_beijing_time()
         self.sentiment_update_interval = random.randint(3600, 43200)  # 1h-12h
         self.last_market_update = get_beijing_time()
         self.market_update_interval = 600  # 10分钟
-        # 启动市场更新任务
-        asyncio.create_task(self._market_update_task())
-        asyncio.create_task(self._sentiment_update_task())
+        self._tasks_started = False
+
+    def start_background_tasks(self):
+        """启动后台任务（应在事件循环就绪后调用）"""
+        if not self._tasks_started:
+            self._tasks_started = True
+            asyncio.create_task(self._market_update_task())
+            asyncio.create_task(self._sentiment_update_task())
 
     async def _market_update_task(self):
         """市场更新任务"""
@@ -421,16 +427,14 @@ class StockService:
         Returns:
             {stock_name: {"quantity": float, "avg_price": float}, ...}
         """
-        async with aiosqlite.connect(self.db_path) as db:
-            cursor = await db.execute(
-                """SELECT stock_name, SUM(remaining) as total_qty,
-                       SUM(remaining * buy_price) / SUM(remaining) as avg_cost
-                   FROM stock_holdings
-                   WHERE user_id = ? AND remaining > 0
-                   GROUP BY stock_name""",
-                (user_id,)
-            )
-            holdings = await cursor.fetchall()
+        holdings = await self._fetchall(
+            """SELECT stock_name, SUM(remaining) as total_qty,
+                   SUM(remaining * buy_price) / SUM(remaining) as avg_cost
+               FROM stock_holdings
+               WHERE user_id = ? AND remaining > 0
+               GROUP BY stock_name""",
+            (user_id,)
+        )
 
         result = {}
         for stock_name, qty, avg_cost in holdings:
@@ -444,13 +448,11 @@ class StockService:
 
     async def get_stock_price(self, stock_name: str) -> float:
         """获取股票当前价格"""
-        async with aiosqlite.connect(self.db_path) as db:
-            cursor = await db.execute(
-                "SELECT current_price FROM stock_prices WHERE stock_name = ? AND delisted = 0",
-                (stock_name,)
-            )
-            row = await cursor.fetchone()
-            return float(row[0]) if row and row[0] else 0.0
+        row = await self._fetchone(
+            "SELECT current_price FROM stock_prices WHERE stock_name = ? AND delisted = 0",
+            (stock_name,)
+        )
+        return float(row[0]) if row and row[0] else 0.0
 
     async def get_portfolio(self, user_id: str) -> dict:
         """查看持仓"""

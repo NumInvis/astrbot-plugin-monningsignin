@@ -6,29 +6,25 @@ import aiosqlite
 from typing import List, Dict, Optional
 from astrbot.api import logger
 from utils import get_beijing_time
+from base_service import BaseService
 
 
-class AnnouncementService:
+class AnnouncementService(BaseService):
     """公告服务类"""
-    
-    def __init__(self, db_path: str):
-        self.db_path = db_path
     
     async def init_table(self):
         """初始化公告表"""
-        async with aiosqlite.connect(self.db_path) as db:
-            await db.execute("""
-                CREATE TABLE IF NOT EXISTS announcements (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    title TEXT NOT NULL,
-                    content TEXT NOT NULL,
-                    author_id TEXT NOT NULL,
-                    author_name TEXT,
-                    publish_time TEXT NOT NULL,
-                    is_broadcast INTEGER DEFAULT 0
-                )
-            """)
-            await db.commit()
+        await self._execute("""
+            CREATE TABLE IF NOT EXISTS announcements (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                title TEXT NOT NULL,
+                content TEXT NOT NULL,
+                author_id TEXT NOT NULL,
+                author_name TEXT,
+                publish_time TEXT NOT NULL,
+                is_broadcast INTEGER DEFAULT 0
+            )
+        """)
     
     async def publish_announcement(self, title: str, content: str, 
                                    author_id: str, author_name: str = "管理员") -> Dict:
@@ -59,59 +55,53 @@ class AnnouncementService:
     
     async def get_announcements(self, limit: int = 10) -> List[Dict]:
         """获取历史公告列表"""
-        async with aiosqlite.connect(self.db_path) as db:
-            cursor = await db.execute(
-                """SELECT id, title, content, author_name, publish_time 
-                   FROM announcements 
-                   ORDER BY publish_time DESC 
-                   LIMIT ?""",
-                (limit,)
-            )
-            rows = await cursor.fetchall()
-            
-            announcements = []
-            for row in rows:
-                announcements.append({
-                    "id": row[0],
-                    "title": row[1],
-                    "content": row[2],
-                    "author_name": row[3],
-                    "publish_time": row[4]
-                })
-            
-            return announcements
+        rows = await self._fetchall(
+            """SELECT id, title, content, author_name, publish_time 
+               FROM announcements 
+               ORDER BY publish_time DESC 
+               LIMIT ?""",
+            (limit,)
+        )
+        
+        announcements = []
+        for row in rows:
+            announcements.append({
+                "id": row[0],
+                "title": row[1],
+                "content": row[2],
+                "author_name": row[3],
+                "publish_time": row[4]
+            })
+        
+        return announcements
     
     async def get_latest_announcement(self) -> Optional[Dict]:
         """获取最新公告"""
-        async with aiosqlite.connect(self.db_path) as db:
-            cursor = await db.execute(
-                """SELECT id, title, content, author_name, publish_time 
-                   FROM announcements 
-                   ORDER BY publish_time DESC 
-                   LIMIT 1"""
-            )
-            row = await cursor.fetchone()
-            
-            if row:
-                return {
-                    "id": row[0],
-                    "title": row[1],
-                    "content": row[2],
-                    "author_name": row[3],
-                    "publish_time": row[4]
-                }
-            return None
+        row = await self._fetchone(
+            """SELECT id, title, content, author_name, publish_time 
+               FROM announcements 
+               ORDER BY publish_time DESC 
+               LIMIT 1"""
+        )
+        
+        if row:
+            return {
+                "id": row[0],
+                "title": row[1],
+                "content": row[2],
+                "author_name": row[3],
+                "publish_time": row[4]
+            }
+        return None
     
     async def delete_announcement(self, announcement_id: int) -> bool:
         """删除公告"""
         try:
-            async with aiosqlite.connect(self.db_path) as db:
-                await db.execute(
-                    "DELETE FROM announcements WHERE id = ?",
-                    (announcement_id,)
-                )
-                await db.commit()
-                return True
+            await self._execute(
+                "DELETE FROM announcements WHERE id = ?",
+                (announcement_id,)
+            )
+            return True
         except Exception as e:
             logger.error(f"删除公告失败: {e}")
             return False
@@ -119,14 +109,12 @@ class AnnouncementService:
     async def pin_announcement(self, announcement_id: int) -> bool:
         """置顶公告（通过更新时间为最新实现）"""
         try:
-            async with aiosqlite.connect(self.db_path) as db:
-                now = get_beijing_time().strftime("%Y-%m-%d %H:%M:%S")
-                await db.execute(
-                    "UPDATE announcements SET publish_time = ? WHERE id = ?",
-                    (now, announcement_id)
-                )
-                await db.commit()
-                return True
+            now = get_beijing_time().strftime("%Y-%m-%d %H:%M:%S")
+            await self._execute(
+                "UPDATE announcements SET publish_time = ? WHERE id = ?",
+                (now, announcement_id)
+            )
+            return True
         except Exception as e:
             logger.error(f"置顶公告失败: {e}")
             return False
@@ -155,13 +143,11 @@ class AnnouncementService:
     async def remove_whitelist(self, group_id: str) -> bool:
         """移除公告白名单"""
         try:
-            async with aiosqlite.connect(self.db_path) as db:
-                await db.execute(
-                    "DELETE FROM announcement_whitelist WHERE group_id = ?",
-                    (group_id,)
-                )
-                await db.commit()
-                return True
+            await self._execute(
+                "DELETE FROM announcement_whitelist WHERE group_id = ?",
+                (group_id,)
+            )
+            return True
         except Exception as e:
             logger.error(f"移除白名单失败: {e}")
             return False
@@ -169,12 +155,10 @@ class AnnouncementService:
     async def get_whitelist(self) -> List[str]:
         """获取白名单列表"""
         try:
-            async with aiosqlite.connect(self.db_path) as db:
-                cursor = await db.execute(
-                    "SELECT group_id FROM announcement_whitelist ORDER BY added_time DESC"
-                )
-                rows = await cursor.fetchall()
-                return [row[0] for row in rows]
+            rows = await self._fetchall(
+                "SELECT group_id FROM announcement_whitelist ORDER BY added_time DESC"
+            )
+            return [row[0] for row in rows]
         except Exception as e:
             logger.error(f"获取白名单失败: {e}")
             return []

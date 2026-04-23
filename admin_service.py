@@ -11,13 +11,11 @@ import aiosqlite
 from config import CONFIG
 from achievements import ACHIEVEMENTS
 from utils import get_beijing_time, mask_id
+from base_service import BaseService
 
 
-class AdminService:
+class AdminService(BaseService):
     """管理员服务"""
-    
-    def __init__(self, db_path: str):
-        self.db_path = db_path
     
     async def get_all_achievements(self) -> Dict[str, List[str]]:
         """获取所有用户的成就"""

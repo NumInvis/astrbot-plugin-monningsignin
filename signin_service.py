@@ -8,13 +8,11 @@ from astrbot.api import logger
 
 from utils import today_str
 from config import CONFIG
+from base_service import BaseService
 
 
-class SigninService:
+class SigninService(BaseService):
     """签到服务"""
-
-    def __init__(self, db_path: str):
-        self.db_path = db_path
 
     async def signin(self, user_id: str, percentile: float) -> Dict:
         """用户签到（使用事务保证原子性）"""
@@ -24,7 +22,7 @@ class SigninService:
         async with aiosqlite.connect(self.db_path) as db:
             try:
                 # 获取用户信息
-                user = await self._get_user(db, user_id)
+                user = await self._get_user(user_id)
                 logger.info(f"【签到】用户 {user_id} 信息: balance={user['balance']}, last_signin_date={user['last_signin_date']}")
 
                 # 检查是否已签到
@@ -156,37 +154,4 @@ class SigninService:
 
         return yue_count, yue_count / 100.0
 
-    async def _get_user(self, db, user_id: str) -> Dict:
-        """获取用户信息"""
-        cursor = await db.execute(
-            """SELECT user_id, balance, bank_balance, last_signin_date,
-                      consecutive_days, favor_value
-               FROM users WHERE user_id = ?""",
-            (user_id,)
-        )
-        row = await cursor.fetchone()
 
-        if row:
-            return {
-                "user_id": row[0],
-                "balance": int(row[1]) if row[1] else 0,
-                "bank_balance": int(row[2]) if row[2] else 0,
-                "last_signin_date": row[3],
-                "consecutive_days": int(row[4]) if row[4] else 0,
-                "favor_value": int(row[5]) if row[5] else 0
-            }
-
-        # 如果用户不存在，创建用户
-        await db.execute(
-            "INSERT INTO users (user_id) VALUES (?)", (user_id,)
-        )
-        await db.commit()
-
-        return {
-            "user_id": user_id,
-            "balance": 0,
-            "bank_balance": 0,
-            "last_signin_date": None,
-            "consecutive_days": 0,
-            "favor_value": 0
-        }

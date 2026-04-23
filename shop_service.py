@@ -4,13 +4,11 @@ import random
 from config import CONFIG
 from astrbot.api import logger
 from utils import today_str, format_num
+from base_service import BaseService
 
 
-class ShopService:
+class ShopService(BaseService):
     """商店服务类"""
-    
-    def __init__(self, db_path: str):
-        self.db_path = db_path
     
     async def get_shop_items(self) -> dict:
         """获取商店物品列表"""
@@ -104,21 +102,18 @@ class ShopService:
     
     async def get_inventory(self, user_id: str) -> dict:
         """获取背包物品"""
-        async with aiosqlite.connect(self.db_path) as db:
-            cursor = await db.execute(
-                "SELECT item_name, quantity FROM inventory WHERE user_id = ? AND quantity > 0",
-                (user_id,)
-            )
-            items = await cursor.fetchall()
-            
-            # 查询今日占卜次数
-            cursor = await db.execute(
-                "SELECT count FROM lottery_log WHERE user_id = ? AND date = ?",
-                (user_id, today_str())
-            )
-            row = await cursor.fetchone()
-            used_count = int(row[0]) if row else 0
-            remaining = CONFIG.LOTTERY_LIMIT - used_count
+        items = await self._fetchall(
+            "SELECT item_name, quantity FROM inventory WHERE user_id = ? AND quantity > 0",
+            (user_id,)
+        )
+        
+        # 查询今日占卜次数
+        row = await self._fetchone(
+            "SELECT count FROM lottery_log WHERE user_id = ? AND date = ?",
+            (user_id, today_str())
+        )
+        used_count = int(row[0]) if row else 0
+        remaining = CONFIG.LOTTERY_LIMIT - used_count
         
         # 检查花朵成就
         flower_count = 0
@@ -298,14 +293,12 @@ class ShopService:
     
     async def get_lottery_probability(self, user_id: str) -> dict:
         """获取占卜概率分布"""
-        async with aiosqlite.connect(self.db_path) as db:
-            cursor = await db.execute(
-                "SELECT count FROM lottery_log WHERE user_id = ? AND date = ?",
-                (user_id, today_str())
-            )
-            row = await cursor.fetchone()
-            used_today = int(row[0]) if row else 0
-            remaining = CONFIG.LOTTERY_LIMIT - used_today
+        row = await self._fetchone(
+            "SELECT count FROM lottery_log WHERE user_id = ? AND date = ?",
+            (user_id, today_str())
+        )
+        used_today = int(row[0]) if row else 0
+        remaining = CONFIG.LOTTERY_LIMIT - used_today
         
         # 实际概率分布
         prob_dist = [

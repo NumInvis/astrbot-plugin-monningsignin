@@ -185,10 +185,10 @@ class TarotService(BaseService):
                         (loss, user_id)
                     )
                 else:
-                    # 现金不够，扣完现金再扣银行
+                    # 现金不够，扣完现金再扣银行（银行也扣到0为止）
                     remaining = loss - cash
                     await db.execute(
-                        "UPDATE users SET balance = 0, bank_balance = bank_balance - ? WHERE user_id = ?",
+                        "UPDATE users SET balance = 0, bank_balance = MAX(0, bank_balance - ?) WHERE user_id = ?",
                         (remaining, user_id)
                     )
                 await db.commit()

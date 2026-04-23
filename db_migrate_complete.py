@@ -106,7 +106,14 @@ async def migrate_database(db_path: str):
         # 2.4 user_work 表 - 检查可能缺失的字段
         await _add_column_if_not_exists(db, "user_work", "total_earned", "INTEGER DEFAULT 0")
 
-        # 2.5 user_daily_tarot 表 - 检查可能缺失的字段
+        # 2.5 user_society 表 - 检查可能缺失的字段
+        await _add_column_if_not_exists(db, "user_society", "join_time", "TEXT")
+        await _add_column_if_not_exists(db, "user_society", "last_change_time", "TEXT")
+
+        # 2.6 achievement_bonuses 表 - bonus_value 改为 REAL 支持浮点利率
+        await _add_column_if_not_exists(db, "achievement_bonuses", "bonus_value", "REAL DEFAULT 0")
+
+        # 2.7 user_daily_tarot 表 - 检查可能缺失的字段
         await _add_column_if_not_exists(db, "user_daily_tarot", "effect_type", "TEXT")
         await _add_column_if_not_exists(db, "user_daily_tarot", "effect_value", "INTEGER DEFAULT 0")
 

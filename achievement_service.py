@@ -9,13 +9,14 @@ from astrbot.api import logger
 from achievements import ACHIEVEMENTS, AchievementManager
 from config import CONFIG
 from utils import today_str, now_str
+from base_service import BaseService
 
 
-class AchievementService:
+class AchievementService(BaseService):
     """成就服务类"""
 
     def __init__(self, db_path: str):
-        self.db_path = db_path
+        super().__init__(db_path)
         self.achievement_manager = AchievementManager(db_path)
     
     async def init_table(self):
@@ -38,7 +39,7 @@ class AchievementService:
                     user_id TEXT NOT NULL,
                     achievement_id TEXT NOT NULL,
                     bonus_type TEXT NOT NULL,
-                    bonus_value INTEGER DEFAULT 0,
+                    bonus_value REAL DEFAULT 0,
                     UNIQUE(user_id, achievement_id, bonus_type)
                 )
             """)
@@ -46,12 +47,11 @@ class AchievementService:
     
     async def get_user_achievements(self, user_id: str) -> dict:
         """获取用户成就"""
-        async with aiosqlite.connect(self.db_path) as db:
-            cursor = await db.execute(
-                "SELECT achievement_id, obtain_time FROM user_achievements WHERE user_id = ?",
-                (user_id,)
-            )
-            obtained = {row[0]: row[1] for row in await cursor.fetchall()}
+        rows = await self._fetchall(
+            "SELECT achievement_id, obtain_time FROM user_achievements WHERE user_id = ?",
+            (user_id,)
+        )
+        obtained = {row[0]: row[1] for row in rows}
 
         # 获取所有成就（包括自定义成就）
         all_achievements = await self.achievement_manager.get_all_achievements()
@@ -321,8 +321,6 @@ class AchievementService:
             await self.grant_achievement(uid, "moning_master")
         
         # 给所有已有数据的用户授予"先行者"成就
-        async with aiosqlite.connect(self.db_path) as db:
-            cursor = await db.execute("SELECT user_id FROM users")
-            users = await cursor.fetchall()
-            for (uid,) in users:
-                await self.grant_achievement(uid, "pioneer")
+        users = await self._fetchall("SELECT user_id FROM users")
+        for (uid,) in users:
+            await self.grant_achievement(uid, "pioneer")

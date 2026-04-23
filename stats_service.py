@@ -8,23 +8,19 @@ from datetime import timedelta
 
 from utils import get_beijing_time, today_str
 from astrbot.api import logger
+from base_service import BaseService
 
 
-class StatsService:
+class StatsService(BaseService):
     """统计服务类
 
     集中管理所有经济统计数据，避免各服务重复查询
     """
 
-    def __init__(self, db_path: str):
-        self.db_path = db_path
-
     async def get_player_count(self) -> int:
         """获取玩家总数"""
-        async with aiosqlite.connect(self.db_path) as db:
-            cursor = await db.execute("SELECT COUNT(*) FROM users")
-            row = await cursor.fetchone()
-            return row[0] if row else 0
+        row = await self._fetchone("SELECT COUNT(*) FROM users")
+        return row[0] if row else 0
 
     async def get_all_users_assets(self) -> List[Dict]:
         """获取所有用户资产详情（优化版本，使用JOIN避免N+1查询）
@@ -32,52 +28,48 @@ class StatsService:
         Returns:
             [{"user_id": str, "cash": int, "bank": int, "stock": int, "total": int}, ...]
         """
-        async with aiosqlite.connect(self.db_path) as db:
-            cursor = await db.execute("""
-                SELECT
-                    u.user_id,
-                    COALESCE(u.balance, 0) as cash,
-                    COALESCE(u.bank_balance, 0) as bank,
-                    COALESCE(SUM(sh.remaining * sp.current_price), 0) as stock_value
-                FROM users u
-                LEFT JOIN stock_holdings sh ON u.user_id = sh.user_id AND sh.remaining > 0
-                LEFT JOIN stock_prices sp ON sh.stock_name = sp.stock_name AND sp.delisted = 0
-                GROUP BY u.user_id
-            """)
-            rows = await cursor.fetchall()
+        rows = await self._fetchall("""
+            SELECT
+                u.user_id,
+                COALESCE(u.balance, 0) as cash,
+                COALESCE(u.bank_balance, 0) as bank,
+                COALESCE(SUM(sh.remaining * sp.current_price), 0) as stock_value
+            FROM users u
+            LEFT JOIN stock_holdings sh ON u.user_id = sh.user_id AND sh.remaining > 0
+            LEFT JOIN stock_prices sp ON sh.stock_name = sp.stock_name AND sp.delisted = 0
+            GROUP BY u.user_id
+        """)
 
-            result = []
-            for row in rows:
-                user_id = row[0]
-                cash = int(row[1]) if row[1] else 0
-                bank = int(row[2]) if row[2] else 0
-                stock_value = int(row[3]) if row[3] else 0
+        result = []
+        for row in rows:
+            user_id = row[0]
+            cash = int(row[1]) if row[1] else 0
+            bank = int(row[2]) if row[2] else 0
+            stock_value = int(row[3]) if row[3] else 0
 
-                total = cash + bank + stock_value
-                result.append({
-                    "user_id": user_id,
-                    "cash": cash,
-                    "bank": bank,
-                    "stock": stock_value,
-                    "total": total
-                })
+            total = cash + bank + stock_value
+            result.append({
+                "user_id": user_id,
+                "cash": cash,
+                "bank": bank,
+                "stock": stock_value,
+                "total": total
+            })
 
-            return result
+        return result
 
     async def get_total_wealth(self) -> int:
         """获取经济总量（所有用户总资产之和）"""
-        async with aiosqlite.connect(self.db_path) as db:
-            cursor = await db.execute("""
-                SELECT
-                    COALESCE(SUM(u.balance), 0) +
-                    COALESCE(SUM(u.bank_balance), 0) +
-                    COALESCE(SUM(sh.remaining * sp.current_price), 0) as total
-                FROM users u
-                LEFT JOIN stock_holdings sh ON u.user_id = sh.user_id AND sh.remaining > 0
-                LEFT JOIN stock_prices sp ON sh.stock_name = sp.stock_name AND sp.delisted = 0
-            """)
-            row = await cursor.fetchone()
-            return int(row[0]) if row and row[0] else 0
+        row = await self._fetchone("""
+            SELECT
+                COALESCE(SUM(u.balance), 0) +
+                COALESCE(SUM(u.bank_balance), 0) +
+                COALESCE(SUM(sh.remaining * sp.current_price), 0) as total
+            FROM users u
+            LEFT JOIN stock_holdings sh ON u.user_id = sh.user_id AND sh.remaining > 0
+            LEFT JOIN stock_prices sp ON sh.stock_name = sp.stock_name AND sp.delisted = 0
+        """)
+        return int(row[0]) if row and row[0] else 0
 
     async def get_average_wealth(self) -> float:
         """获取人均资产"""
@@ -87,65 +79,61 @@ class StatsService:
 
     async def get_median_wealth(self) -> int:
         """获取资产中位数"""
-        async with aiosqlite.connect(self.db_path) as db:
-            cursor = await db.execute("""
-                SELECT total_wealth FROM (
-                    SELECT
-                        u.user_id,
-                        COALESCE(u.balance, 0) +
-                        COALESCE(u.bank_balance, 0) +
-                        COALESCE(SUM(sh.remaining * sp.current_price), 0) as total_wealth
-                    FROM users u
-                    LEFT JOIN stock_holdings sh ON u.user_id = sh.user_id AND sh.remaining > 0
-                    LEFT JOIN stock_prices sp ON sh.stock_name = sp.stock_name AND sp.delisted = 0
-                    GROUP BY u.user_id
-                )
-                ORDER BY total_wealth
-            """)
-            rows = await cursor.fetchall()
-
-            if not rows:
-                return 0
-
-            totals = [int(row[0]) for row in rows if row[0]]
-            n = len(totals)
-
-            if n % 2 == 1:
-                return totals[n // 2]
-            else:
-                return (totals[n // 2 - 1] + totals[n // 2]) // 2
-
-    async def get_top10_assets(self) -> List[Dict]:
-        """获取资产排行榜前十名（使用SQL排序）"""
-        async with aiosqlite.connect(self.db_path) as db:
-            cursor = await db.execute("""
+        rows = await self._fetchall("""
+            SELECT total_wealth FROM (
                 SELECT
                     u.user_id,
-                    COALESCE(u.balance, 0) as cash,
-                    COALESCE(u.bank_balance, 0) as bank,
-                    COALESCE(SUM(sh.remaining * sp.current_price), 0) as stock_value,
-                    COALESCE(u.balance, 0) + COALESCE(u.bank_balance, 0) +
-                    COALESCE(SUM(sh.remaining * sp.current_price), 0) as total
+                    COALESCE(u.balance, 0) +
+                    COALESCE(u.bank_balance, 0) +
+                    COALESCE(SUM(sh.remaining * sp.current_price), 0) as total_wealth
                 FROM users u
                 LEFT JOIN stock_holdings sh ON u.user_id = sh.user_id AND sh.remaining > 0
                 LEFT JOIN stock_prices sp ON sh.stock_name = sp.stock_name AND sp.delisted = 0
                 GROUP BY u.user_id
-                ORDER BY total DESC
-                LIMIT 10
-            """)
-            rows = await cursor.fetchall()
+            )
+            ORDER BY total_wealth
+        """)
 
-            result = []
-            for row in rows:
-                result.append({
-                    "user_id": row[0],
-                    "cash": int(row[1]) if row[1] else 0,
-                    "bank": int(row[2]) if row[2] else 0,
-                    "stock": int(row[3]) if row[3] else 0,
-                    "total": int(row[4]) if row[4] else 0
-                })
+        if not rows:
+            return 0
 
-            return result
+        totals = [int(row[0]) for row in rows if row[0]]
+        n = len(totals)
+
+        if n % 2 == 1:
+            return totals[n // 2]
+        else:
+            return (totals[n // 2 - 1] + totals[n // 2]) // 2
+
+    async def get_top10_assets(self) -> List[Dict]:
+        """获取资产排行榜前十名（使用SQL排序）"""
+        rows = await self._fetchall("""
+            SELECT
+                u.user_id,
+                COALESCE(u.balance, 0) as cash,
+                COALESCE(u.bank_balance, 0) as bank,
+                COALESCE(SUM(sh.remaining * sp.current_price), 0) as stock_value,
+                COALESCE(u.balance, 0) + COALESCE(u.bank_balance, 0) +
+                COALESCE(SUM(sh.remaining * sp.current_price), 0) as total
+            FROM users u
+            LEFT JOIN stock_holdings sh ON u.user_id = sh.user_id AND sh.remaining > 0
+            LEFT JOIN stock_prices sp ON sh.stock_name = sp.stock_name AND sp.delisted = 0
+            GROUP BY u.user_id
+            ORDER BY total DESC
+            LIMIT 10
+        """)
+
+        result = []
+        for row in rows:
+            result.append({
+                "user_id": row[0],
+                "cash": int(row[1]) if row[1] else 0,
+                "bank": int(row[2]) if row[2] else 0,
+                "stock": int(row[3]) if row[3] else 0,
+                "total": int(row[4]) if row[4] else 0
+            })
+
+        return result
 
     async def get_economy_stats(self, days: int = 7) -> Dict:
         """获取经济统计数据
@@ -169,16 +157,14 @@ class StatsService:
         median_wealth = await self.get_median_wealth()
 
         # 获取税收统计
-        async with aiosqlite.connect(self.db_path) as db:
-            start_date = (get_beijing_time() - timedelta(days=days)).strftime("%Y-%m-%d")
-            cursor = await db.execute(
-                "SELECT date, total_tax FROM tax_pool WHERE date >= ? ORDER BY date DESC",
-                (start_date,)
-            )
-            tax_rows = await cursor.fetchall()
+        start_date = (get_beijing_time() - timedelta(days=days)).strftime("%Y-%m-%d")
+        tax_rows = await self._fetchall(
+            "SELECT date, total_tax FROM tax_pool WHERE date >= ? ORDER BY date DESC",
+            (start_date,)
+        )
 
-            tax_total = sum(int(row[1]) for row in tax_rows if row[1])
-            daily_stats = [{"date": row[0], "tax": int(row[1]) if row[1] else 0} for row in tax_rows]
+        tax_total = sum(int(row[1]) for row in tax_rows if row[1])
+        daily_stats = [{"date": row[0], "tax": int(row[1]) if row[1] else 0} for row in tax_rows]
 
         return {
             "player_count": player_count,

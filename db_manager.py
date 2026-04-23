@@ -103,7 +103,9 @@ class DatabaseManager:
                 CREATE TABLE IF NOT EXISTS user_society (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
                     user_id TEXT NOT NULL UNIQUE,
-                    society_name TEXT NOT NULL
+                    society_name TEXT,
+                    join_time TEXT,
+                    last_change_time TEXT
                 )
             """)
             

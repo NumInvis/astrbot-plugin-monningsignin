@@ -5,23 +5,19 @@ from astrbot.api import logger
 
 from config import CONFIG
 from utils import today_str, format_num
+from base_service import BaseService
 
 
-class BankService:
+class BankService(BaseService):
     """银行服务类"""
-
-    def __init__(self, db_path: str):
-        self.db_path = db_path
 
     async def has_vip_card(self, user_id: str) -> bool:
         """检查是否有贵宾卡"""
-        async with aiosqlite.connect(self.db_path) as db:
-            cursor = await db.execute(
-                "SELECT quantity FROM inventory WHERE user_id = ? AND item_name = ?",
-                (user_id, "莫塔里贵宾卡")
-            )
-            row = await cursor.fetchone()
-            return row is not None and row[0] > 0
+        row = await self._fetchone(
+            "SELECT quantity FROM inventory WHERE user_id = ? AND item_name = ?",
+            (user_id, "莫塔里贵宾卡")
+        )
+        return row is not None and row[0] > 0
 
     async def _get_rate(self, db, user_id: str) -> float:
         """获取用户银行存款利率（内部方法）"""

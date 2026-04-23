@@ -34,7 +34,7 @@ DEFAULT_ACHIEVEMENTS = {
     "lottery_winner": {"name": "欧皇", "desc": "占卜获得66倍奖励", "emoji": "🍀", "rarity": "blue"},
     "sadness_is_water": {"name": "我的悲伤是水做的", "desc": "占卜倍率小于0.05", "emoji": "💧", "rarity": "blue"},
     # 彩色成就
-    "rich_colorful": {"name": "兆亿富翁", "desc": "总资产达到1亿", "emoji": "👑", "rarity": "purple"},
+    "rich_colorful": {"name": "兆亿富翁", "desc": "总资产达到1亿", "emoji": "👑", "rarity": "colorful"},
     "cycle_breaker": {"name": "斩断循环", "desc": "第宁赛季资产排行榜第一名", "emoji": "⚔️", "rarity": "colorful"},
     "moning_master": {"name": "莫宁之主", "desc": "系统管理员", "emoji": "👑", "rarity": "colorful"},
 }

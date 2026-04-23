@@ -8,46 +8,39 @@ import aiosqlite
 from config import CONFIG
 from utils import today_str, now_str, mask_id, get_beijing_time
 from astrbot.api import logger
+from base_service import BaseService
 
 
-class FavorSystem:
+class FavorSystem(BaseService):
     """好感度系统类"""
-
-    def __init__(self, db_path: str):
-        self.db_path = db_path
 
     async def get_user_favor_info(self, user_id: str) -> dict:
         """获取用户好感度信息"""
-        async with aiosqlite.connect(self.db_path) as db:
-            cursor = await db.execute(
-                "SELECT COALESCE(favor_value, 0) FROM users WHERE user_id = ?",
-                (user_id,)
-            )
-            row = await cursor.fetchone()
-            favor_value = row[0] if row else 0
+        row = await self._fetchone(
+            "SELECT COALESCE(favor_value, 0) FROM users WHERE user_id = ?",
+            (user_id,)
+        )
+        favor_value = row[0] if row else 0
 
-            # 计算好感度
-            cursor = await db.execute(
-                "SELECT SUM(favor_value) FROM users WHERE favor_value > 0"
-            )
-            total_positive_favor = await cursor.fetchone()
-            total_positive_favor = total_positive_favor[0] if total_positive_favor and total_positive_favor[0] else 1
+        # 计算好感度
+        total_positive_favor = await self._fetchone(
+            "SELECT SUM(favor_value) FROM users WHERE favor_value > 0"
+        )
+        total_positive_favor = total_positive_favor[0] if total_positive_favor and total_positive_favor[0] else 1
 
-            favor_level = (favor_value / total_positive_favor) * 520 if total_positive_favor > 0 else 0
+        favor_level = (favor_value / total_positive_favor) * 520 if total_positive_favor > 0 else 0
 
-            return {
-                "user_id": user_id,
-                "favor_value": favor_value,
-                "favor_level": favor_level
-            }
+        return {
+            "user_id": user_id,
+            "favor_value": favor_value,
+            "favor_level": favor_level
+        }
 
     async def get_favor_ranking(self) -> list:
         """获取好感度排行榜"""
-        async with aiosqlite.connect(self.db_path) as db:
-            cursor = await db.execute(
-                "SELECT user_id, favor_value FROM users WHERE favor_value > 0 ORDER BY favor_value DESC"
-            )
-            users = await cursor.fetchall()
+        users = await self._fetchall(
+            "SELECT user_id, favor_value FROM users WHERE favor_value > 0 ORDER BY favor_value DESC"
+        )
 
         if not users:
             return []
@@ -67,13 +60,11 @@ class FavorSystem:
 
     async def add_favor_value(self, user_id: str, amount: int) -> bool:
         """增加用户好感值（使用COALESCE处理NULL）"""
-        async with aiosqlite.connect(self.db_path) as db:
-            await db.execute(
-                "UPDATE users SET favor_value = COALESCE(favor_value, 0) + ? WHERE user_id = ?",
-                (amount, user_id)
-            )
-            await db.commit()
-            return True
+        await self._execute(
+            "UPDATE users SET favor_value = COALESCE(favor_value, 0) + ? WHERE user_id = ?",
+            (amount, user_id)
+        )
+        return True
 
     def get_favor_items(self) -> dict:
         """获取好感值商品配置"""
@@ -137,8 +128,8 @@ class FavorSystem:
                 (price, user_id)
             )
 
-            # 随机决定好感值变化（-5 到 +10）
-            favor_change = random.randint(-5, 10)
+            # 使用配置的好感值（与商店描述一致）
+            favor_change = items[item_name]
 
             # 更新好感值
             await db.execute(
@@ -208,79 +199,71 @@ class FavorSystem:
 
     async def get_total_economy(self) -> int:
         """获取经济总量（所有用户资产总和）"""
-        async with aiosqlite.connect(self.db_path) as db:
-            # 计算现金+银行存款
-            cursor = await db.execute(
-                "SELECT COALESCE(SUM(balance + bank_balance), 0) FROM users"
-            )
-            cash_bank = await cursor.fetchone()
-            cash_bank = cash_bank[0] if cash_bank and cash_bank[0] else 0
+        # 计算现金+银行存款
+        cash_bank = await self._fetchone(
+            "SELECT COALESCE(SUM(balance + bank_balance), 0) FROM users"
+        )
+        cash_bank = cash_bank[0] if cash_bank and cash_bank[0] else 0
 
-            # 计算股票市值
-            cursor = await db.execute(
-                """SELECT COALESCE(SUM(sh.remaining * sp.current_price), 0)
-                   FROM stock_holdings sh
-                   JOIN stock_prices sp ON sh.stock_name = sp.stock_name
-                   WHERE sh.remaining > 0 AND sp.delisted = 0"""
-            )
-            stock = await cursor.fetchone()
-            stock = stock[0] if stock and stock[0] else 0
+        # 计算股票市值
+        stock = await self._fetchone(
+            """SELECT COALESCE(SUM(sh.remaining * sp.current_price), 0)
+               FROM stock_holdings sh
+               JOIN stock_prices sp ON sh.stock_name = sp.stock_name
+               WHERE sh.remaining > 0 AND sp.delisted = 0"""
+        )
+        stock = stock[0] if stock and stock[0] else 0
 
-            return int(cash_bank + stock)
+        return int(cash_bank + stock)
 
     async def get_user_assets(self, user_id: str) -> dict:
         """获取用户资产详情"""
-        async with aiosqlite.connect(self.db_path) as db:
-            # 获取现金和存款
-            cursor = await db.execute(
-                "SELECT balance, bank_balance FROM users WHERE user_id = ?",
-                (user_id,)
-            )
-            row = await cursor.fetchone()
-            cash = row[0] if row and row[0] else 0
-            bank = row[1] if row and row[1] else 0
+        # 获取现金和存款
+        row = await self._fetchone(
+            "SELECT balance, bank_balance FROM users WHERE user_id = ?",
+            (user_id,)
+        )
+        cash = row[0] if row and row[0] else 0
+        bank = row[1] if row and row[1] else 0
 
-            # 获取股票市值
-            cursor = await db.execute(
-                """SELECT COALESCE(SUM(sh.remaining * sp.current_price), 0)
-                   FROM stock_holdings sh
-                   JOIN stock_prices sp ON sh.stock_name = sp.stock_name
-                   WHERE sh.user_id = ? AND sh.remaining > 0 AND sp.delisted = 0""",
-                (user_id,)
-            )
-            stock_row = await cursor.fetchone()
-            stock = int(stock_row[0]) if stock_row and stock_row[0] else 0
+        # 获取股票市值
+        stock_row = await self._fetchone(
+            """SELECT COALESCE(SUM(sh.remaining * sp.current_price), 0)
+               FROM stock_holdings sh
+               JOIN stock_prices sp ON sh.stock_name = sp.stock_name
+               WHERE sh.user_id = ? AND sh.remaining > 0 AND sp.delisted = 0""",
+            (user_id,)
+        )
+        stock = int(stock_row[0]) if stock_row and stock_row[0] else 0
 
-            return {
-                'cash': cash,
-                'bank': bank,
-                'stock': stock,
-                'total': cash + bank + stock
-            }
+        return {
+            'cash': cash,
+            'bank': bank,
+            'stock': stock,
+            'total': cash + bank + stock
+        }
 
     async def get_user_achievement_bonuses(self, user_id: str) -> dict:
         """获取用户的成就加成"""
-        async with aiosqlite.connect(self.db_path) as db:
-            cursor = await db.execute(
-                "SELECT bonus_type, SUM(bonus_value) FROM achievement_bonuses WHERE user_id = ? GROUP BY bonus_type",
-                (user_id,)
-            )
-            rows = await cursor.fetchall()
+        rows = await self._fetchall(
+            "SELECT bonus_type, SUM(bonus_value) FROM achievement_bonuses WHERE user_id = ? GROUP BY bonus_type",
+            (user_id,)
+        )
 
-            bonuses = {
-                "signin_extra": 0,      # 蓝色：每日签到额外星声
-                "bank_rate_bonus": 0,   # 紫色：银行利率加成
-                "company_shares_bonus": 0,  # 金色：创立公司额外股份
-                "signin_favor_bonus": 0     # 彩色：每日签到额外好感值
-            }
+        bonuses = {
+            "signin_extra": 0,      # 蓝色：每日签到额外星声
+            "bank_rate_bonus": 0,   # 紫色：银行利率加成
+            "company_shares_bonus": 0,  # 金色：创立公司额外股份
+            "signin_favor_bonus": 0     # 彩色：每日签到额外好感值
+        }
 
-            for row in rows:
-                bonus_type = row[0]
-                bonus_value = row[1]
-                if bonus_type in bonuses:
-                    bonuses[bonus_type] = bonus_value
+        for row in rows:
+            bonus_type = row[0]
+            bonus_value = row[1]
+            if bonus_type in bonuses:
+                bonuses[bonus_type] = bonus_value
 
-            return bonuses
+        return bonuses
 
     async def update_relationship_desc(self, user_id: str, description: str) -> dict:
         """更新AI生成的关系描述，带CD检查
@@ -337,31 +320,29 @@ class FavorSystem:
         Returns:
             dict: {'desc': str, 'can_update': bool, 'next_update_time': str}
         """
-        async with aiosqlite.connect(self.db_path) as db:
-            cursor = await db.execute(
-                "SELECT relationship_desc, next_update_time FROM user_relationship WHERE user_id = ?",
-                (user_id,)
-            )
-            row = await cursor.fetchone()
+        row = await self._fetchone(
+            "SELECT relationship_desc, next_update_time FROM user_relationship WHERE user_id = ?",
+            (user_id,)
+        )
 
-            if not row:
-                return {'desc': None, 'can_update': True, 'next_update_time': None}
+        if not row:
+            return {'desc': None, 'can_update': True, 'next_update_time': None}
 
-            desc = row[0]
-            next_update_str = row[1]
+        desc = row[0]
+        next_update_str = row[1]
 
-            if not next_update_str:
-                return {'desc': desc, 'can_update': True, 'next_update_time': None}
+        if not next_update_str:
+            return {'desc': desc, 'can_update': True, 'next_update_time': None}
 
-            try:
-                next_update = datetime.strptime(next_update_str, "%Y-%m-%d %H:%M:%S")
-                next_update = next_update.replace(tzinfo=timezone(timedelta(hours=8)))
-                can_update = get_beijing_time() >= next_update
-            except:
-                can_update = True
+        try:
+            next_update = datetime.strptime(next_update_str, "%Y-%m-%d %H:%M:%S")
+            next_update = next_update.replace(tzinfo=timezone(timedelta(hours=8)))
+            can_update = get_beijing_time() >= next_update
+        except:
+            can_update = True
 
-            return {
-                'desc': desc,
-                'can_update': can_update,
-                'next_update_time': next_update_str
-            }
+        return {
+            'desc': desc,
+            'can_update': can_update,
+            'next_update_time': next_update_str
+        }
