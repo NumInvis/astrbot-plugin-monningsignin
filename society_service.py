@@ -7,35 +7,15 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import aiosqlite
 from datetime import datetime, timedelta, timezone
 from config import CONFIG
+from utils import format_num, mask_id, get_beijing_time, now_str
+from base_service import BaseService
 
 
-def format_num(n: int) -> str:
-    return f"{n:,}"
-
-
-def mask_user_id(uid: str) -> str:
-    if len(uid) <= 4:
-        return uid
-    return uid[:3] + "***" + uid[-2:]
-
-
-def get_beijing_time() -> datetime:
-    """获取北京时间（UTC+8）"""
-    utc_now = datetime.now(timezone.utc)
-    beijing_tz = timezone(timedelta(hours=8))
-    return utc_now.astimezone(beijing_tz)
-
-
-def now_str() -> str:
-    """获取当前时间的字符串（北京时间）"""
-    return get_beijing_time().strftime("%Y-%m-%d %H:%M:%S")
-
-
-class SocietyService:
+class SocietyService(BaseService):
     """结社服务类"""
-    
+
     def __init__(self, db_path: str):
-        self.db_path = db_path
+        super().__init__(db_path)
     
     async def get_society_stats(self) -> dict:
         """获取结社统计信息"""
@@ -206,8 +186,8 @@ class SocietyService:
                 member_count = await cursor.fetchone()
                 member_count = member_count[0] if member_count else 0
                 
-                # 获取富人阶级平均资产
-                rich_avg = await self._get_rich_average_asset(db)
+                # 获取富人阶级平均资产（使用BaseService方法）
+                rich_avg = await self._get_rich_average_asset(percentile=0.2)
                 wage_increase = member_count * 0.0001 * rich_avg
                 benefits = {
                     "type": "工资增加",
@@ -228,36 +208,7 @@ class SocietyService:
                 }
         
         return benefits
-    
-    async def _get_rich_average_asset(self, db) -> int:
-        """获取富人阶级（前20%）玩家的平均资产"""
-        # 获取所有用户资产
-        cursor = await db.execute("SELECT user_id FROM users")
-        users = await cursor.fetchall()
-        
-        if not users:
-            return 0
-        
-        asset_list = []
-        for (uid,) in users:
-            asset = await self._get_user_asset(uid)
-            total = asset[0]  # 总资产
-            asset_list.append(total)
-        
-        if not asset_list:
-            return 0
-        
-        # 排序并取前20%
-        asset_list.sort(reverse=True)
-        top_20_percent = int(len(asset_list) * 0.2)
-        if top_20_percent == 0:
-            top_20_percent = 1
-        
-        top_assets = asset_list[:top_20_percent]
-        avg_asset = sum(top_assets) // len(top_assets)
-        
-        return avg_asset
-    
+
     async def _get_society_top_user(self, society_name: str):
         """获取结社资产第一的用户"""
         async with aiosqlite.connect(self.db_path) as db:
@@ -289,47 +240,11 @@ class SocietyService:
                     (top_user,)
                 )
                 row = await cursor.fetchone()
-                nickname = row[0] if row and row[0] else mask_user_id(top_user)
+                nickname = row[0] if row and row[0] else mask_id(top_user)
                 return (top_user, top_asset, nickname)
 
             return None
-    
-    async def _get_user_asset(self, user_id: str) -> tuple:
-        """获取用户资产"""
-        async with aiosqlite.connect(self.db_path) as db:
-            # 获取现金和银行存款
-            cursor = await db.execute(
-                "SELECT balance, bank_balance FROM users WHERE user_id = ?",
-                (user_id,)
-            )
-            row = await cursor.fetchone()
-            
-            if not row:
-                return (0, 0, 0, 0)
-            
-            # 安全转换
-            try:
-                cash = int(row[0]) if row[0] else 0
-            except (ValueError, TypeError):
-                cash = 0
-            try:
-                bank = int(row[1]) if row[1] else 0
-            except (ValueError, TypeError):
-                bank = 0
-            
-            # 计算股票市值
-            cursor = await db.execute(
-                """SELECT COALESCE(SUM(sh.remaining * sp.current_price), 0)
-                   FROM stock_holdings sh
-                   JOIN stock_prices sp ON sh.stock_name = sp.stock_name
-                   WHERE sh.user_id = ? AND sh.remaining > 0 AND sp.delisted = 0""",
-                (user_id,)
-            )
-            row = await cursor.fetchone()
-            stock = int(row[0]) if row and row[0] else 0
-        
-        return cash + bank + stock, cash, bank, stock
-    
+
     async def get_society_benefit_detail(self, society_name: str) -> dict:
         """获取结社福利详情（用于看板展示）"""
         async with aiosqlite.connect(self.db_path) as db:
@@ -370,8 +285,8 @@ class SocietyService:
                 )
                 member_count = await cursor.fetchone()
                 member_count = member_count[0] if member_count else 0
-                
-                rich_avg = await self._get_rich_average_asset(db)
+
+                rich_avg = await self._get_rich_average_asset(percentile=0.2)
                 wage_increase = member_count * 0.0001 * rich_avg
                 return {
                     "type": "工资增加",
@@ -422,3 +337,35 @@ class SocietyService:
                 (user_id, achievement_id, now_str())
             )
             await db.commit()
+
+    async def leave_society(self, user_id: str) -> dict:
+        """离开当前结社
+
+        Returns:
+            dict: {'success': bool, 'message': str}
+        """
+        async with aiosqlite.connect(self.db_path) as db:
+            # 检查当前结社
+            cursor = await db.execute(
+                "SELECT society_name FROM user_society WHERE user_id = ?",
+                (user_id,)
+            )
+            row = await cursor.fetchone()
+
+            if not row or not row[0]:
+                return {'success': False, 'message': '你还没有加入任何结社'}
+
+            society_name = row[0]
+
+            # 离开结社（通过加入空值实现）
+            now = get_beijing_time().strftime("%Y-%m-%d %H:%M:%S")
+            await db.execute(
+                """INSERT INTO user_society (user_id, society_name, join_time, last_change_time)
+                   VALUES (?, NULL, ?, ?)
+                   ON CONFLICT(user_id) DO UPDATE SET
+                   society_name = NULL, last_change_time = ?""",
+                (user_id, now, now, now)
+            )
+            await db.commit()
+
+            return {'success': True, 'message': f'已成功离开 {society_name}', 'society_name': society_name}

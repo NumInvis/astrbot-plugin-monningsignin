@@ -1,193 +1,192 @@
 """
 签到服务模块
 """
-import os
-import sys
-# 添加当前目录到Python路径
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-
-from typing import Dict, Optional
-from datetime import datetime, timedelta, timezone
+from typing import Dict
+from datetime import datetime
 import aiosqlite
-import random
+from astrbot.api import logger
 
-
-def get_beijing_time() -> datetime:
-    """获取北京时间（UTC+8）"""
-    utc_now = datetime.now(timezone.utc)
-    beijing_tz = timezone(timedelta(hours=8))
-    return utc_now.astimezone(beijing_tz)
+from utils import today_str
+from config import CONFIG
 
 
 class SigninService:
     """签到服务"""
-    
+
     def __init__(self, db_path: str):
         self.db_path = db_path
-    
+
     async def signin(self, user_id: str, percentile: float) -> Dict:
-        """用户签到"""
-        today = get_beijing_time().strftime("%Y-%m-%d")
-        
+        """用户签到（使用事务保证原子性）"""
+        today = today_str()
+        logger.info(f"【签到】用户 {user_id} 开始签到，今日日期: {today}")
+
         async with aiosqlite.connect(self.db_path) as db:
-            # 获取用户信息
-            user = await self._get_user(db, user_id)
-            
-            # 检查是否已签到
-            if user["last_signin_date"] == today:
-                return {
-                    "success": False,
-                    "message": "今日已签到",
-                    "balance": user["balance"],
-                    "consecutive_days": user["consecutive_days"]
-                }
-            
-            # 计算连续签到天数
-            last_date = user["last_signin_date"]
-            if last_date:
-                try:
-                    last = datetime.strptime(last_date, "%Y-%m-%d")
-                    today_date = datetime.strptime(today, "%Y-%m-%d")
-                    days_diff = (today_date - last).days
-                    
-                    if days_diff == 1:
-                        consecutive = user["consecutive_days"] + 1
-                    else:
-                        consecutive = 1
-                except:
-                    consecutive = 1
-            else:
-                consecutive = 1
-            
-            # 计算签到奖励
             try:
-                # 动态导入并刷新模块
-                import importlib
-                import config
-                importlib.reload(config)
-                from config import CONFIG
-                base = getattr(CONFIG, 'BASE_SIGNIN_REWARD', 100)
-            except Exception as e:
-                # 如果导入失败，使用默认值
-                base = 100
-            bonus = int(base * (consecutive * 0.1))
-            
-            # 计算成就加成
-            # 蓝色成就：每日签到额外增加星声
-            signin_extra = 0
-            cursor = await db.execute(
-                "SELECT SUM(bonus_value) FROM achievement_bonuses WHERE user_id = ? AND bonus_type = 'signin_extra'",
-                (user_id,)
-            )
-            bonus_result = await cursor.fetchone()
-            if bonus_result and bonus_result[0]:
-                signin_extra = int(bonus_result[0])
-            
-            # 彩色成就：每日签到额外获得好感值
-            signin_favor_bonus = 0
-            cursor = await db.execute(
-                "SELECT SUM(bonus_value) FROM achievement_bonuses WHERE user_id = ? AND bonus_type = 'signin_favor_bonus'",
-                (user_id,)
-            )
-            favor_result = await cursor.fetchone()
-            if favor_result and favor_result[0]:
-                signin_favor_bonus = int(favor_result[0])
-            
-            # 拜月结社福利
-            yue_bonus_fixed = 0
-            yue_bonus_percent = 0.0
-            cursor = await db.execute(
-                "SELECT society_name FROM user_society WHERE user_id = ?",
-                (user_id,)
-            )
-            society_row = await cursor.fetchone()
-            if society_row and society_row[0] == "拜月结社":
-                cursor = await db.execute(
-                    "SELECT COUNT(*) FROM user_society WHERE society_name = '拜月结社'"
-                )
-                yue_count = await cursor.fetchone()
-                yue_count = yue_count[0] if yue_count else 0
-                yue_bonus_fixed = yue_count
-                yue_bonus_percent = yue_count / 100.0
-            
-            # 低保加成（根据排名）
-            low_income_rate = max(0.1, percentile)  # 最低10%加成
-            total_before_yue = base + bonus + signin_extra
-            yue_bonus = int(total_before_yue * yue_bonus_percent)
-            total = total_before_yue + yue_bonus_fixed + yue_bonus
-            
-            # 更新用户数据（余额）
-            new_balance = user["balance"] + total
-            
-            # 更新用户数据（好感值 - 彩色成就加成）
-            if signin_favor_bonus > 0:
+                # 获取用户信息
+                user = await self._get_user(db, user_id)
+                logger.info(f"【签到】用户 {user_id} 信息: balance={user['balance']}, last_signin_date={user['last_signin_date']}")
+
+                # 检查是否已签到
+                if user["last_signin_date"] == today:
+                    logger.info(f"【签到】用户 {user_id} 今日已签到")
+                    return {
+                        "success": False,
+                        "message": "今日已签到",
+                        "balance": user["balance"],
+                        "consecutive_days": user["consecutive_days"]
+                    }
+
+                # 计算连续签到天数
+                consecutive = self._calculate_consecutive_days(user, today)
+                logger.info(f"【签到】用户 {user_id} 连续签到天数: {consecutive}")
+
+                # 计算签到奖励
+                rewards = await self._calculate_rewards(db, user_id, consecutive, percentile)
+                logger.info(f"【签到】用户 {user_id} 奖励计算: base={rewards['base']}, total={rewards['total']}")
+
+                # 更新用户数据
+                new_balance = user["balance"] + rewards["total"]
+                logger.info(f"【签到】用户 {user_id} 更新余额: {user['balance']} -> {new_balance}")
                 await db.execute(
-                    "UPDATE users SET favor_value = favor_value + ? WHERE user_id = ?",
-                    (signin_favor_bonus, user_id)
+                    """UPDATE users
+                       SET balance = ?,
+                           last_signin_date = ?,
+                           consecutive_days = ?,
+                           favor_value = favor_value + ?
+                       WHERE user_id = ?""",
+                    (new_balance, today, consecutive, rewards["signin_favor_bonus"], user_id)
                 )
-            
-            await db.execute(
-                "UPDATE users SET balance = ?, last_signin_date = ?, consecutive_days = ? WHERE user_id = ?",
-                (new_balance, today, consecutive, user_id)
-            )
-            await db.commit()
-            
-            return {
-                "success": True,
-                "base": base,
-                "bonus": bonus,
-                "signin_extra": signin_extra,  # 蓝色成就加成
-                "signin_favor_bonus": signin_favor_bonus,  # 彩色成就加成
-                "yue_bonus_fixed": yue_bonus_fixed,  # 拜月结社固定加成
-                "yue_bonus": yue_bonus,  # 拜月结社百分比加成
-                "total": total,
-                "balance": new_balance,
-                "consecutive_days": consecutive
-            }
-    
+                await db.commit()
+                logger.info(f"【签到】用户 {user_id} 签到成功，新余额: {new_balance}")
+
+                return {
+                    "success": True,
+                    "base": rewards["base"],
+                    "bonus": rewards["bonus"],
+                    "signin_extra": rewards["signin_extra"],
+                    "signin_favor_bonus": rewards["signin_favor_bonus"],
+                    "yue_bonus_fixed": rewards["yue_bonus_fixed"],
+                    "yue_bonus": rewards["yue_bonus"],
+                    "total": rewards["total"],
+                    "balance": new_balance,
+                    "consecutive_days": consecutive
+                }
+            except Exception as e:
+                logger.error(f"【签到】用户 {user_id} 签到失败: {e}")
+                import traceback
+                logger.error(traceback.format_exc())
+                return {"success": False, "message": "签到失败，请稍后重试"}
+
+    def _calculate_consecutive_days(self, user: Dict, today: str) -> int:
+        """计算连续签到天数"""
+        last_date = user["last_signin_date"]
+        if not last_date:
+            return 1
+
+        try:
+            last = datetime.strptime(last_date, "%Y-%m-%d")
+            today_date = datetime.strptime(today, "%Y-%m-%d")
+            days_diff = (today_date - last).days
+
+            if days_diff == 1:
+                return user["consecutive_days"] + 1
+            else:
+                return 1
+        except (ValueError, TypeError) as e:
+            logger.warning(f"日期解析失败: {e}")
+            return 1
+
+    async def _calculate_rewards(self, db, user_id: str, consecutive: int,
+                                  percentile: float) -> Dict:
+        """计算签到奖励"""
+        # 基础奖励
+        base = CONFIG.BASE_SIGNIN_REWARD
+        bonus = int(base * (consecutive * 0.1))
+
+        # 成就加成
+        signin_extra = await self._get_achievement_bonus(db, user_id, 'signin_extra')
+        signin_favor_bonus = await self._get_achievement_bonus(db, user_id, 'signin_favor_bonus')
+
+        # 拜月结社福利
+        yue_bonus_fixed, yue_bonus_percent = await self._get_yue_bonus(db, user_id)
+
+        # 计算总奖励
+        total_before_yue = base + bonus + signin_extra
+        yue_bonus = int(total_before_yue * yue_bonus_percent)
+        total = total_before_yue + yue_bonus_fixed + yue_bonus
+
+        return {
+            "base": base,
+            "bonus": bonus,
+            "signin_extra": signin_extra,
+            "signin_favor_bonus": signin_favor_bonus,
+            "yue_bonus_fixed": yue_bonus_fixed,
+            "yue_bonus": yue_bonus,
+            "total": total
+        }
+
+    async def _get_achievement_bonus(self, db, user_id: str, bonus_type: str) -> int:
+        """获取成就加成"""
+        cursor = await db.execute(
+            """SELECT COALESCE(SUM(bonus_value), 0) FROM achievement_bonuses
+               WHERE user_id = ? AND bonus_type = ?""",
+            (user_id, bonus_type)
+        )
+        result = await cursor.fetchone()
+        return int(result[0]) if result else 0
+
+    async def _get_yue_bonus(self, db, user_id: str) -> tuple:
+        """获取拜月结社福利"""
+        cursor = await db.execute(
+            "SELECT society_name FROM user_society WHERE user_id = ?",
+            (user_id,)
+        )
+        row = await cursor.fetchone()
+
+        if not row or row[0] != "拜月结社":
+            return 0, 0.0
+
+        # 计算拜月结社人数
+        cursor = await db.execute(
+            "SELECT COUNT(*) FROM user_society WHERE society_name = '拜月结社'"
+        )
+        yue_count = await cursor.fetchone()
+        yue_count = yue_count[0] if yue_count else 0
+
+        return yue_count, yue_count / 100.0
+
     async def _get_user(self, db, user_id: str) -> Dict:
         """获取用户信息"""
         cursor = await db.execute(
-            "SELECT * FROM users WHERE user_id = ?", (user_id,)
+            """SELECT user_id, balance, bank_balance, last_signin_date,
+                      consecutive_days, favor_value
+               FROM users WHERE user_id = ?""",
+            (user_id,)
         )
         row = await cursor.fetchone()
-        
+
         if row:
-            # 安全转换数值字段
-            try:
-                balance = int(row[1]) if len(row) > 1 and row[1] else 0
-            except (ValueError, TypeError):
-                balance = 0
-            try:
-                bank_balance = int(row[2]) if len(row) > 2 and row[2] else 0
-            except (ValueError, TypeError):
-                bank_balance = 0
-            try:
-                last_signin_date = row[3] if len(row) > 3 else None
-            except:
-                last_signin_date = None
-            try:
-                consecutive = int(row[4]) if len(row) > 4 and row[4] else 0
-            except (ValueError, TypeError):
-                consecutive = 0
             return {
                 "user_id": row[0],
-                "balance": balance,
-                "bank_balance": bank_balance,
-                "last_signin_date": last_signin_date,
-                "consecutive_days": consecutive
+                "balance": int(row[1]) if row[1] else 0,
+                "bank_balance": int(row[2]) if row[2] else 0,
+                "last_signin_date": row[3],
+                "consecutive_days": int(row[4]) if row[4] else 0,
+                "favor_value": int(row[5]) if row[5] else 0
             }
-        
+
         # 如果用户不存在，创建用户
         await db.execute(
             "INSERT INTO users (user_id) VALUES (?)", (user_id,)
         )
         await db.commit()
-        
+
         return {
             "user_id": user_id,
             "balance": 0,
             "bank_balance": 0,
             "last_signin_date": None,
-            "consecutive_days": 0
+            "consecutive_days": 0,
+            "favor_value": 0
         }

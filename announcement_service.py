@@ -3,16 +3,9 @@
 提供系统公告发布、查询和广播功能
 """
 import aiosqlite
-from datetime import datetime, timedelta, timezone
 from typing import List, Dict, Optional
 from astrbot.api import logger
-
-
-def get_beijing_time() -> datetime:
-    """获取北京时间（UTC+8）"""
-    utc_now = datetime.now(timezone.utc)
-    beijing_tz = timezone(timedelta(hours=8))
-    return utc_now.astimezone(beijing_tz)
+from utils import get_beijing_time
 
 
 class AnnouncementService:
@@ -122,3 +115,66 @@ class AnnouncementService:
         except Exception as e:
             logger.error(f"删除公告失败: {e}")
             return False
+    
+    async def pin_announcement(self, announcement_id: int) -> bool:
+        """置顶公告（通过更新时间为最新实现）"""
+        try:
+            async with aiosqlite.connect(self.db_path) as db:
+                now = get_beijing_time().strftime("%Y-%m-%d %H:%M:%S")
+                await db.execute(
+                    "UPDATE announcements SET publish_time = ? WHERE id = ?",
+                    (now, announcement_id)
+                )
+                await db.commit()
+                return True
+        except Exception as e:
+            logger.error(f"置顶公告失败: {e}")
+            return False
+    
+    async def add_whitelist(self, group_id: str) -> bool:
+        """添加公告白名单"""
+        try:
+            async with aiosqlite.connect(self.db_path) as db:
+                await db.execute("""
+                    CREATE TABLE IF NOT EXISTS announcement_whitelist (
+                        group_id TEXT PRIMARY KEY,
+                        added_time TEXT NOT NULL
+                    )
+                """)
+                now = get_beijing_time().strftime("%Y-%m-%d %H:%M:%S")
+                await db.execute(
+                    "INSERT OR REPLACE INTO announcement_whitelist (group_id, added_time) VALUES (?, ?)",
+                    (group_id, now)
+                )
+                await db.commit()
+                return True
+        except Exception as e:
+            logger.error(f"添加白名单失败: {e}")
+            return False
+    
+    async def remove_whitelist(self, group_id: str) -> bool:
+        """移除公告白名单"""
+        try:
+            async with aiosqlite.connect(self.db_path) as db:
+                await db.execute(
+                    "DELETE FROM announcement_whitelist WHERE group_id = ?",
+                    (group_id,)
+                )
+                await db.commit()
+                return True
+        except Exception as e:
+            logger.error(f"移除白名单失败: {e}")
+            return False
+    
+    async def get_whitelist(self) -> List[str]:
+        """获取白名单列表"""
+        try:
+            async with aiosqlite.connect(self.db_path) as db:
+                cursor = await db.execute(
+                    "SELECT group_id FROM announcement_whitelist ORDER BY added_time DESC"
+                )
+                rows = await cursor.fetchall()
+                return [row[0] for row in rows]
+        except Exception as e:
+            logger.error(f"获取白名单失败: {e}")
+            return []

@@ -8,24 +8,15 @@ import aiosqlite
 import random
 from datetime import datetime, timedelta, timezone
 from config import CONFIG
+from utils import get_beijing_time, format_num
+from base_service import BaseService
 
 
-def get_beijing_time() -> datetime:
-    """获取北京时间（UTC+8）"""
-    utc_now = datetime.now(timezone.utc)
-    beijing_tz = timezone(timedelta(hours=8))
-    return utc_now.astimezone(beijing_tz)
-
-
-def format_num(n: int) -> str:
-    return f"{n:,}"
-
-
-class WorkService:
+class WorkService(BaseService):
     """工作服务类"""
-    
+
     def __init__(self, db_path: str):
-        self.db_path = db_path
+        super().__init__(db_path)
     
     async def get_works(self) -> dict:
         """获取工作列表"""
@@ -120,62 +111,7 @@ class WorkService:
             "total_earned": total_earned or 0,
             "last_claim_time": last_claim_str
         }
-    
-    async def _get_rich_average_asset(self, db) -> int:
-        """获取富人阶级（前20%）玩家的平均资产"""
-        cursor = await db.execute("SELECT user_id FROM users")
-        users = await cursor.fetchall()
-        
-        if not users:
-            return 0
-        
-        asset_list = []
-        for (uid,) in users:
-            # 获取用户资产
-            cursor = await db.execute(
-                "SELECT balance, bank_balance FROM users WHERE user_id = ?",
-                (uid,)
-            )
-            row = await cursor.fetchone()
-            if not row:
-                continue
-            try:
-                cash = int(row[0]) if row[0] else 0
-            except (ValueError, TypeError):
-                cash = 0
-            try:
-                bank = int(row[1]) if row[1] else 0
-            except (ValueError, TypeError):
-                bank = 0
-            
-            # 计算股票市值
-            cursor = await db.execute(
-                """SELECT COALESCE(SUM(sh.remaining * sp.current_price), 0)
-                   FROM stock_holdings sh
-                   JOIN stock_prices sp ON sh.stock_name = sp.stock_name
-                   WHERE sh.user_id = ? AND sh.remaining > 0 AND sp.delisted = 0""",
-                (uid,)
-            )
-            stock_row = await cursor.fetchone()
-            stock = int(stock_row[0]) if stock_row and stock_row[0] else 0
-            
-            total = cash + bank + stock
-            asset_list.append(total)
-        
-        if not asset_list:
-            return 0
-        
-        # 排序并取前20%
-        asset_list.sort(reverse=True)
-        top_20_percent = int(len(asset_list) * 0.2)
-        if top_20_percent == 0:
-            top_20_percent = 1
-        
-        top_assets = asset_list[:top_20_percent]
-        avg_asset = sum(top_assets) // len(top_assets)
-        
-        return avg_asset
-    
+
     async def claim_salary(self, user_id: str) -> dict:
         """领取工资"""
         async with aiosqlite.connect(self.db_path) as db:
@@ -225,9 +161,9 @@ class WorkService:
                 )
                 qian_count = await cursor.fetchone()
                 qian_count = qian_count[0] if qian_count else 0
-                
-                # 获取富人阶级平均资产
-                rich_avg = await self._get_rich_average_asset(db)
+
+                # 获取富人阶级平均资产（使用BaseService方法）
+                rich_avg = await self._get_rich_average_asset(percentile=0.2)
                 qian_bonus = int(qian_count * 0.0001 * rich_avg * hours)
         
         now_str = now.strftime("%Y-%m-%d %H:%M:%S")

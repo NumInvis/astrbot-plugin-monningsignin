@@ -7,35 +7,9 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import aiosqlite
 import random
 import asyncio
-from datetime import datetime, timedelta, timezone
+from datetime import timedelta, timezone
 from config import CONFIG
-
-
-def get_beijing_time() -> datetime:
-    """获取北京时间（UTC+8）"""
-    utc_now = datetime.now(timezone.utc)
-    beijing_tz = timezone(timedelta(hours=8))
-    return utc_now.astimezone(beijing_tz)
-
-
-def today_str() -> str:
-    """获取今天的日期字符串（北京时间）"""
-    return get_beijing_time().strftime("%Y-%m-%d")
-
-
-def now_str() -> str:
-    """获取当前时间的字符串（北京时间）"""
-    return get_beijing_time().strftime("%Y-%m-%d %H:%M:%S")
-
-
-def format_num(n: int) -> str:
-    return f"{n:,}"
-
-
-def mask_id(uid: str) -> str:
-    if len(uid) <= 4:
-        return uid
-    return uid[:3] + "***" + uid[-2:]
+from utils import get_beijing_time, today_str, now_str, format_num, mask_id
 
 
 class StockService:
@@ -223,7 +197,7 @@ class StockService:
         
         async with aiosqlite.connect(self.db_path) as db:
             cursor = await db.execute(
-                "SELECT current_price FROM stock_prices WHERE stock_name = ? AND delisted = 0",
+                "SELECT current_price, base_price FROM stock_prices WHERE stock_name = ? AND delisted = 0",
                 (stock_name,)
             )
             row = await cursor.fetchone()
@@ -232,17 +206,32 @@ class StockService:
                 return {"success": False, "message": "股票不存在或已退市"}
             
             price = row[0]
+            base_price = row[1]
             
-            # 大额交易影响价格
-            if quantity > 10000:
-                # 每10000股价格上涨0.5%
-                price_increase = min(0.1, quantity / 10000 * 0.005)
+            # 计算交易金额
+            trade_value = price * quantity
+            
+            # 大额交易影响价格（基于交易金额和市值比例）
+            # 获取总市值（100万股）
+            market_cap = base_price * 1000000
+            
+            # 如果交易金额超过市值的1%，开始影响价格
+            if trade_value > market_cap * 0.01:
+                # 价格影响 = (交易金额 / 市值) * 影响系数
+                # 买入推动价格上涨，最大影响10%
+                impact_ratio = trade_value / market_cap
+                price_increase = min(0.1, impact_ratio * 0.5)  # 影响系数0.5
                 price = price * (1 + price_increase)
                 # 更新股票价格
                 await db.execute(
                     "UPDATE stock_prices SET current_price = ? WHERE stock_name = ?",
                     (price, stock_name)
                 )
+                
+                # 记录价格影响
+                price_impact_msg = f"📈 大额买入推动股价上涨 {price_increase*100:.2f}%"
+            else:
+                price_impact_msg = None
             
             total_cost = int(price * quantity)
             
@@ -269,25 +258,49 @@ class StockService:
                 "UPDATE users SET balance = balance - ? WHERE user_id = ?",
                 (total_cost, user_id)
             )
-            await db.execute(
-                """INSERT INTO stock_holdings 
-                    (user_id, stock_name, quantity, buy_price, buy_time, remaining, last_dividend_date)
-                    VALUES (?, ?, ?, ?, ?, ?, ?)""",
-                (user_id, stock_name, quantity, price, now, quantity, today_str())
+            
+            # 检查是否已有持仓
+            cursor = await db.execute(
+                "SELECT remaining FROM stock_holdings WHERE user_id = ? AND stock_name = ?",
+                (user_id, stock_name)
             )
+            existing = await cursor.fetchone()
+            
+            if existing:
+                # 已有持仓，累加数量
+                old_remaining = float(existing[0]) if existing[0] else 0
+                new_remaining = old_remaining + quantity
+                await db.execute(
+                    """UPDATE stock_holdings 
+                        SET quantity = quantity + ?, remaining = ?, buy_price = ?,
+                            buy_time = ?, last_dividend_date = ?
+                        WHERE user_id = ? AND stock_name = ?""",
+                    (quantity, new_remaining, price, now, today_str(), user_id, stock_name)
+                )
+            else:
+                # 新持仓
+                await db.execute(
+                    """INSERT INTO stock_holdings 
+                        (user_id, stock_name, quantity, buy_price, buy_time, remaining, last_dividend_date)
+                        VALUES (?, ?, ?, ?, ?, ?, ?)""",
+                    (user_id, stock_name, quantity, price, now, quantity, today_str())
+                )
             
             # 检查是否成为控股股东
             await self._check_controlling_shareholder(db, user_id, stock_name)
             
             await db.commit()
         
-        return {
+        result = {
             "success": True,
             "stock_name": stock_name,
             "price": price,
             "quantity": quantity,
             "total_cost": total_cost
         }
+        if price_impact_msg:
+            result["price_impact"] = price_impact_msg
+        return result
     
     async def sell_stock(self, user_id: str, stock_name: str, want_sell: float) -> dict:
         """卖出股票"""
@@ -296,7 +309,7 @@ class StockService:
         
         async with aiosqlite.connect(self.db_path) as db:
             cursor = await db.execute(
-                "SELECT current_price FROM stock_prices WHERE stock_name = ? AND delisted = 0",
+                "SELECT current_price, base_price FROM stock_prices WHERE stock_name = ? AND delisted = 0",
                 (stock_name,)
             )
             row = await cursor.fetchone()
@@ -305,17 +318,30 @@ class StockService:
                 return {"success": False, "message": "股票不存在或已退市"}
             
             price = row[0]
+            base_price = row[1]
             
-            # 大额交易影响价格
-            if want_sell > 10000:
-                # 每10000股价格下跌0.5%
-                price_decrease = min(0.1, want_sell / 10000 * 0.005)
+            # 计算交易金额
+            trade_value = price * want_sell
+            
+            # 获取总市值（100万股）
+            market_cap = base_price * 1000000
+            
+            # 大额交易影响价格（基于交易金额和市值比例）
+            # 如果交易金额超过市值的1%，开始影响价格
+            if trade_value > market_cap * 0.01:
+                # 价格影响 = (交易金额 / 市值) * 影响系数
+                # 卖出导致价格下跌，最大影响10%
+                impact_ratio = trade_value / market_cap
+                price_decrease = min(0.1, impact_ratio * 0.5)  # 影响系数0.5
                 price = price * (1 - price_decrease)
                 # 更新股票价格
                 await db.execute(
                     "UPDATE stock_prices SET current_price = ? WHERE stock_name = ?",
                     (price, stock_name)
                 )
+                price_impact_msg = f"📉 大额卖出导致股价下跌 {price_decrease*100:.2f}%"
+            else:
+                price_impact_msg = None
             
             # 获取可卖持仓
             cursor = await db.execute(
@@ -375,7 +401,7 @@ class StockService:
             
             await db.commit()
         
-        return {
+        result = {
             "success": True,
             "stock_name": stock_name,
             "price": price,
@@ -385,7 +411,47 @@ class StockService:
             "net_amount": net_amount,
             "is_nuo_member": is_nuo_member
         }
-    
+        if price_impact_msg:
+            result["price_impact"] = price_impact_msg
+        return result
+
+    async def get_stock_holdings(self, user_id: str) -> dict:
+        """获取用户所有股票持仓（用于资产计算）
+
+        Returns:
+            {stock_name: {"quantity": float, "avg_price": float}, ...}
+        """
+        async with aiosqlite.connect(self.db_path) as db:
+            cursor = await db.execute(
+                """SELECT stock_name, SUM(remaining) as total_qty,
+                       SUM(remaining * buy_price) / SUM(remaining) as avg_cost
+                   FROM stock_holdings
+                   WHERE user_id = ? AND remaining > 0
+                   GROUP BY stock_name""",
+                (user_id,)
+            )
+            holdings = await cursor.fetchall()
+
+        result = {}
+        for stock_name, qty, avg_cost in holdings:
+            if qty and qty > 0:
+                result[stock_name] = {
+                    "quantity": qty,
+                    "avg_price": avg_cost if avg_cost else 0
+                }
+
+        return result
+
+    async def get_stock_price(self, stock_name: str) -> float:
+        """获取股票当前价格"""
+        async with aiosqlite.connect(self.db_path) as db:
+            cursor = await db.execute(
+                "SELECT current_price FROM stock_prices WHERE stock_name = ? AND delisted = 0",
+                (stock_name,)
+            )
+            row = await cursor.fetchone()
+            return float(row[0]) if row and row[0] else 0.0
+
     async def get_portfolio(self, user_id: str) -> dict:
         """查看持仓"""
         async with aiosqlite.connect(self.db_path) as db:

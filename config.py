@@ -7,13 +7,9 @@ from decimal import Decimal
 class Config:
     """配置类"""
     # 税收
-    TAX_RATES = [0.10, 0.09, 0.08, 0.07, 0.06, 0.05, 0.04, 0.03, 0.02, 0.01]
-    MAX_TAX_RATE = 0.99
-    WEALTH_GAP_DIVISOR = 8888.0
-    
-    # 慈善
-    CHARITY_FEE_RATE = 0.01
-    CHARITY_RECIPIENT = "1312857963"
+    TOP10_TAX_RATES = [0.20, 0.18, 0.16, 0.14, 0.12, 0.10, 0.08, 0.06, 0.04, 0.02]
+    EXTRA_TAX_MEDIAN_MULTIPLIER = 888
+    EXTRA_TAX_MAX_RATE = 0.80
     
     # 银行
     BANK_NORMAL_RATE = 0.01
@@ -21,31 +17,27 @@ class Config:
     BANK_WITHDRAW_FEE = 0.001
     
     # 股票
-    STOCK_SHARES = Decimal("1000000")
     STOCK_MIN_CAPITAL = Decimal("10000000")
-    STOCK_DELIST_PRICE = Decimal("1.00")
-    STOCK_COOLDOWN = 60
-    STOCK_FEE = Decimal("0.001")
     
     # 商店
     SHOP_ITEMS = {
-        "占卜券": {"price": 10, "daily_limit": 6, "desc": "让卜灵给你占一卦吧！"},
-        "莫塔里贵宾卡": {"price": 8888, "daily_limit": 1, 
-                      "desc": "银行日1.5%，取星声免手续费"},
-        "花花": {"price": 5, "daily_limit": 99, "desc": "给莫宁送一朵花花"},
-        "索拉里斯之心": {"price": 88888888, "daily_limit": 1, 
-                      "desc": "从此不会被莫宁宁禁言（也许）"},
-        "真理碎片": {"price": 1000000000, "daily_limit": 1, 
-                    "desc": "希望 是无谓的幻象"},
-        "期刊论文": {"price": 12345, "daily_limit": 1, "desc": "增加莫宁宁10点好感值"},
-        "植物奶": {"price": 250, "daily_limit": 2, "desc": "增加莫宁宁3点好感值"},
-        "神秘糖果": {"price": 3000, "daily_limit": 1, "desc": "增加莫宁宁5点好感值"},
-        "5090": {"price": 90000, "daily_limit": 1, "desc": "增加莫宁宁15点好感值"},
-        "莫宁宁的抱枕": {"price": 5000, "daily_limit": 1, "desc": "增加莫宁宁8点好感值"},
-        "定制蛋糕": {"price": 3000, "daily_limit": 1, "desc": "增加莫宁宁6点好感值"},
-        "手写信": {"price": 500, "daily_limit": 2, "desc": "增加莫宁宁4点好感值"},
-        "音乐会门票": {"price": 8000, "daily_limit": 1, "desc": "增加莫宁宁1点好感值，并有3%概率获得金色成就"},
-        "嘉年华": {"price": 6480, "daily_limit": 9, "desc": "增加莫宁宁1点好感值"}
+        "占卜券": {"price": 10, "daily_limit": 6, "desc": "让卜灵给你占一卦吧！", "emoji": "🔮"},
+        "莫塔里贵宾卡": {"price": 8888, "daily_limit": 1,
+                      "desc": "银行日1.5%，取星声免手续费", "emoji": "💳"},
+        "花花": {"price": 5, "daily_limit": 99, "desc": "给莫宁送一朵花花", "emoji": "🌸"},
+        "索拉里斯之心": {"price": 88888888, "daily_limit": 1,
+                      "desc": "从此不会被莫宁宁禁言（也许）", "emoji": "💎"},
+        "真理碎片": {"price": 1000000000, "daily_limit": 1,
+                    "desc": "希望 是无谓的幻象", "emoji": "🔷"},
+        "期刊论文": {"price": 12345, "daily_limit": 1, "desc": "增加莫宁宁10点好感值", "emoji": "📄"},
+        "植物奶": {"price": 250, "daily_limit": 2, "desc": "增加莫宁宁3点好感值", "emoji": "🥛"},
+        "神秘糖果": {"price": 3000, "daily_limit": 1, "desc": "增加莫宁宁5点好感值", "emoji": "🍬"},
+        "5090": {"price": 90000, "daily_limit": 1, "desc": "增加莫宁宁15点好感值", "emoji": "🎮"},
+        "莫宁宁的抱枕": {"price": 5000, "daily_limit": 1, "desc": "增加莫宁宁8点好感值", "emoji": "🧸"},
+        "定制蛋糕": {"price": 3000, "daily_limit": 1, "desc": "增加莫宁宁6点好感值", "emoji": "🎂"},
+        "手写信": {"price": 500, "daily_limit": 2, "desc": "增加莫宁宁4点好感值", "emoji": "✉️"},
+        "音乐会门票": {"price": 8000, "daily_limit": 1, "desc": "增加莫宁宁1点好感值，并有3%概率获得金色成就", "emoji": "🎫"},
+        "嘉年华": {"price": 6480, "daily_limit": 9, "desc": "增加莫宁宁1点好感值", "emoji": "🎪"}
     }
     LOTTERY_LIMIT = 6
     
@@ -109,7 +101,8 @@ class Config:
     # - balance_penalty: 失去星声（按总资产比例）
     # - stock_price_up: 持仓股票立即上涨
     # - stock_price_down: 持仓股票立即下跌
-    # - lose_job: 失去工作
+    # - lose_job: 失去当前工作
+    # - lose_salary: 失去1-24小时工资（新效果）
     # - lottery_extra: 占卜次数增加1次
     TAROT_EFFECTS = {
         # 按TAROT_CARDS顺序排列
@@ -126,7 +119,7 @@ class Config:
         "命运之轮": {"type": "stock_price_up", "value": [0.01, 0.03], "desc": "随机一只持仓股票立即上涨1%-3%"},
         "正义": {"type": "stock_price_down", "value": [0.01, 0.03], "desc": "随机一只持仓股票立即下跌1%-3%"},
         "倒吊人": {"type": "lottery_extra", "value": 1, "desc": "占卜次数增加1次"},
-        "死神": {"type": "lose_job", "value": 1, "desc": "失去当前工作"},
+        "死神": {"type": "lose_salary", "value": [1, 24], "desc": "随机失去1-24小时的当前工作工资"},
         "节制": {"type": "balance_reward", "value": [100, 200], "desc": "获得100-200星声"},
         "恶魔": {"type": "balance_penalty", "value": [0.08, 0.15], "desc": "失去总资产8%-15%的星声"},
         "皇后": {"type": "favor_value_reward", "value": [10, 50], "desc": "获得10-50点好感值"},
@@ -141,17 +134,12 @@ class Config:
     ADMIN_IDS = ["1312857963"]
     # 特殊成就用户
     CYCLE_BREAKER_USERS = ["471009846", "2819524649", "2102611814"]
-    # 系统密码
-    SEASON_PASSWORD = "moningningning"
     
     # 公告推送白名单（群号列表）
     ANNOUNCEMENT_WHITELIST = ["1047215229", "468563035", "1078585038"]
     
     # 签到
     BASE_SIGNIN_REWARD = 10
-    
-    # 赛季
-    CURRENT_SEASON = 1
     
     # 成就加成配置
     # 根据用户要求，每个品质的成就都有特定的永久性加成效果：

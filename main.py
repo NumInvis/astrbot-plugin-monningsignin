@@ -4,29 +4,29 @@
 """
 import os
 import sys
+# 确保插件目录在Python路径中
+plugin_dir = os.path.dirname(os.path.abspath(__file__))
+if plugin_dir not in sys.path:
+    sys.path.insert(0, plugin_dir)
+
 import random
-import math
 import json
 import re
 import asyncio
-from datetime import datetime, timedelta, timezone
-from decimal import Decimal, ROUND_DOWN
+from datetime import datetime, timedelta
 from typing import Dict, List, Optional, Tuple, Any
-from dataclasses import dataclass
 
 import aiosqlite
 from astrbot.api.event import filter, AstrMessageEvent
-from astrbot.api.star import Context, Star, register, StarTools
-from astrbot.api.provider import ProviderRequest, LLMResponse
+from astrbot.api.star import Context, Star, register
 from astrbot.api import logger
+import astrbot.api.message_components as Comp
 
-# ============== 配置管理 ==============
-import os
-import sys
-# 添加当前目录到Python路径
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from config import CONFIG
-from achievements import ACHIEVEMENTS
+from config_manager import ConfigManager
+from achievements import AchievementManager, ACHIEVEMENTS
+from help_texts import get_signin_help, get_admin_help
+from tarot_service import TarotService
 
 # ============== 服务类导入 ==============
 from admin_service import AdminService
@@ -38,100 +38,83 @@ from work_service import WorkService
 from stock_service import StockService
 from society_service import SocietyService
 from achievement_service import AchievementService
-from charity_service import CharityService
 from favor_system import FavorSystem
-from db_manager import DatabaseManager
 from announcement_service import AnnouncementService
-from chart_generator import generate_stock_chart
-from utils import today_str, now_str, mask_id, format_num
+from stats_service import StatsService
+from db_manager import DatabaseManager
+from db_migrate_complete import check_and_migrate
+from fix_tarot_table import check_and_fix_tarot
+from utils import today_str, mask_id, format_num, get_beijing_time
 
 
-def get_beijing_time() -> datetime:
-    """获取北京时间（UTC+8）"""
-    utc_now = datetime.now(timezone.utc)
-    beijing_tz = timezone(timedelta(hours=8))
-    return utc_now.astimezone(beijing_tz)
-
-
-# ============== 主插件类 ==============
-@register("astrbot_plugin_signin", "NumInvis", "莫宁宁的币", "2.0.0")
+@register("astrbot_plugin_monningsignin", "NumInvis", "莫宁宁的币", "2.0.0")
 class EconomyPlugin(Star):
     """经济系统主插件"""
 
-    def __init__(self, context: Context, config=None):
+    def __init__(self, context: Context):
         super().__init__(context)
-        self.plugin_config = config  # AstrBot 配置系统
-        # 使用 StarTools.get_data_dir() 获取规范的数据存储目录
-        data_dir = StarTools.get_data_dir()
-        self.db_path = str(data_dir / "signin.db")
         
-        # 从 AstrBot 配置加载并更新 config.py 中的值
-        self._load_config_from_astrbot()
+        # 初始化数据目录 - 使用AstrBot标准数据目录
+        # 优先使用已有的数据库路径
+        plugin_data_dir = "/root/ai/astrbot/data/plugin_data/astrbot_plugin_monningsignin"
+        local_data_dir = os.path.join(os.path.dirname(__file__), "data")
         
-        # 初始化数据库管理器（统一使用DatabaseManager，删除DBManager）
-        self.db_manager = DatabaseManager(self.db_path)
+        # 检查哪个目录存在数据库文件
+        if os.path.exists(os.path.join(plugin_data_dir, "signin.db")):
+            data_dir = plugin_data_dir
+        elif os.path.exists(os.path.join(local_data_dir, "signin.db")):
+            data_dir = local_data_dir
+        else:
+            # 默认使用AstrBot标准数据目录
+            data_dir = plugin_data_dir
+            os.makedirs(data_dir, exist_ok=True)
+        
+        self.db_path = os.path.join(data_dir, "signin.db")
         
         # 初始化服务
-        self.admin_service = AdminService(self.db_path)
-        self.tax_service = TaxService(self.db_path)
         self.signin_service = SigninService(self.db_path)
         self.bank_service = BankService(self.db_path)
         self.shop_service = ShopService(self.db_path)
-        self.work_service = WorkService(self.db_path)
         self.stock_service = StockService(self.db_path)
+        self.work_service = WorkService(self.db_path)
         self.society_service = SocietyService(self.db_path)
         self.achievement_service = AchievementService(self.db_path)
-        self.charity_service = CharityService(self.db_path)
-        
-        # 初始化好感度系统
         self.favor_system = FavorSystem(self.db_path)
-        
-        # 初始化公告服务
+        self.admin_service = AdminService(self.db_path)
+        self.stats_service = StatsService(self.db_path)
+        self.tax_service = TaxService(self.db_path, self.stats_service)
         self.announcement_service = AnnouncementService(self.db_path)
-        
-        # 初始化配置管理器
-        from config_manager import ConfigManager
+        self.tarot_service = TarotService(self.db_path)
         self.config_manager = ConfigManager(self.db_path)
+        self.achievement_manager = AchievementManager(self.db_path)
+        self.db_manager = DatabaseManager(self.db_path)
         
+        # 初始化标志
         self._initialized = False
-        self._init_lock = asyncio.Lock()  # 添加异步锁防止并发初始化
+        self._init_lock = asyncio.Lock()
         
-        logger.info("【经济系统】插件加载中 v2.0.1")
-    
-    def _load_config_from_astrbot(self):
-        """从 AstrBot 配置系统加载配置"""
-        if self.plugin_config:
-            try:
-                # 读取管理员列表 - 支持多种配置对象格式
-                admins = None
-                if isinstance(self.plugin_config, dict):
-                    admins = self.plugin_config.get('admins')
-                elif hasattr(self.plugin_config, 'admins'):
-                    admins = getattr(self.plugin_config, 'admins')
-                elif hasattr(self.plugin_config, '__getitem__'):
-                    try:
-                        admins = self.plugin_config['admins']
-                    except (KeyError, TypeError):
-                        pass
-                
-                if admins and isinstance(admins, list):
-                    CONFIG.ADMIN_IDS = admins
-                    logger.info(f"【经济系统】从 AstrBot 配置加载了 {len(CONFIG.ADMIN_IDS)} 个管理员")
-            except Exception as e:
-                logger.warning(f"【经济系统】加载 AstrBot 配置失败: {e}")
-    
+        logger.info("【经济系统】插件 v2.0.0 加载中...")
+
     async def _ensure_db(self):
-        """确保数据库初始化（带异步锁防止并发）"""
+        """确保数据库已初始化（带异步锁防止并发）"""
         if self._initialized:
             return
-        
+
         async with self._init_lock:
-            # 双重检查，防止多个协程同时通过第一次检查
             if self._initialized:
                 return
-            
-            # 初始化数据库
+
+            # 执行数据库迁移（修复缺失的列）
+            await check_and_migrate(self.db_path)
+
+            # 修复塔罗牌表结构
+            await check_and_fix_tarot(self.db_path)
+
+            # 初始化基础数据库表
             await self.db_manager.init_database()
+            
+            # 初始化成就表
+            await self.achievement_service.init_table()
             
             # 授予赛季成就
             await self.achievement_service.grant_season_achievements()
@@ -142,10 +125,127 @@ class EconomyPlugin(Star):
             # 初始化税收表
             await self.tax_service.init_table()
             
+            # 初始化自定义成就表
+            await self.achievement_manager.init_table()
+            
             self._initialized = True
             logger.info("【经济系统】数据库初始化完成")
+
+            # 启动定时收税任务
+            asyncio.create_task(self._daily_tax_scheduler())
+
+            # 启动定时股票分红任务
+            asyncio.create_task(self._daily_dividend_scheduler())
+
+    async def _daily_tax_scheduler(self):
+        """每日0点自动收税调度器"""
+        last_tax_date = None
+
+        while True:
+            try:
+                now = get_beijing_time()
+                today_str = now.strftime("%Y-%m-%d")
+
+                # 检查是否是0点且今日未收税
+                if now.hour == 0 and now.minute == 0 and last_tax_date != today_str:
+                    logger.info(f"【税收系统】到达0点，开始执行收税...")
+
+                    result = await self.tax_service.collect_tax()
+                    if result:
+                        logger.info(f"【税收系统】自动收税完成：总税收={result['total_tax']}, 奖池={result['bonus_pool']}")
+                    else:
+                        logger.info("【税收系统】今日已收税，跳过")
+
+                    last_tax_date = today_str
+
+                # 每分钟检查一次
+                await asyncio.sleep(60)
+
+            except Exception as e:
+                logger.error(f"【税收系统】自动收税失败：{e}")
+                await asyncio.sleep(60)
+
+    async def _daily_dividend_scheduler(self):
+        """每日0点自动股票分红调度器"""
+        last_dividend_date = None
+
+        while True:
+            try:
+                now = get_beijing_time()
+                today_str = now.strftime("%Y-%m-%d")
+
+                # 检查是否是0点且今日未分红
+                if now.hour == 0 and now.minute == 0 and last_dividend_date != today_str:
+                    logger.info(f"【股票分红】到达0点，开始执行分红...")
+
+                    # 获取所有股票列表
+                    stocks = await self.stock_service.get_stock_market()
+                    total_dividend = 0
+
+                    for stock in stocks:
+                        stock_name = stock['name']
+                        result = await self.stock_service.pay_dividend(stock_name)
+                        if result['success']:
+                            total_dividend += result['total_dividend']
+                            logger.info(f"【股票分红】{stock_name}: 发放 {result['total_dividend']} 星声，利率 {result['dividend_rate']:.2f}%")
+
+                    logger.info(f"【股票分红】完成，总发放：{total_dividend} 星声")
+                    last_dividend_date = today_str
+
+                # 每分钟检查一次
+                await asyncio.sleep(60)
+
+            except Exception as e:
+                logger.error(f"【股票分红】自动分红失败：{e}")
+                await asyncio.sleep(60)
+
+    # ============== 辅助方法 ==============
     
-    # ============== 用户基础功能 ==============
+    def _get_sender_name(self, event: AstrMessageEvent) -> str:
+        """获取发送者名称"""
+        try:
+            sender = event.message_obj.sender
+            if hasattr(sender, 'nickname') and sender.nickname:
+                return sender.nickname
+            if hasattr(sender, 'card') and sender.card:
+                return sender.card
+            if hasattr(sender, 'user_id'):
+                return str(sender.user_id)
+        except Exception:
+            pass
+        
+        try:
+            name = event.get_sender_name()
+            if name:
+                return name
+        except Exception:
+            pass
+        
+        return "未知用户"
+    
+    def _extract_target_user(self, event: AstrMessageEvent) -> Optional[str]:
+        """从消息中提取目标用户ID（支持@或QQ号）"""
+        message_str = event.message_str
+        message_obj = event.message_obj
+        
+        # 方法1：从消息链中查找At组件
+        for comp in message_obj.message:
+            if isinstance(comp, Comp.At):
+                return str(comp.qq)
+        
+        # 方法2：从文本中提取@用户名或QQ号
+        at_match = re.search(r'@(\d{5,})', message_str)
+        if at_match:
+            return at_match.group(1)
+        
+        # 方法3：尝试从参数中提取纯数字QQ号
+        parts = message_str.split()
+        for part in parts[1:]:
+            if part.isdigit() and len(part) >= 5:
+                return part
+        
+        return None
+    
     async def _get_user(self, user_id: str) -> Dict:
         """获取或创建用户"""
         async with aiosqlite.connect(self.db_path) as db:
@@ -155,44 +255,17 @@ class EconomyPlugin(Star):
             row = await cursor.fetchone()
             
             if row:
-                # 安全转换数值字段
-                # 列顺序: user_id(0), balance(1), bank_balance(2), last_signin_date(3), 
-                #         consecutive_days(4), bank_last_date(5), favor_value(6)
-                try:
-                    balance = int(row[1]) if len(row) > 1 and row[1] else 0
-                except (ValueError, TypeError):
-                    balance = 0
-                try:
-                    bank_balance = int(row[2]) if len(row) > 2 and row[2] else 0
-                except (ValueError, TypeError):
-                    bank_balance = 0
-                try:
-                    last_signin_date = row[3] if len(row) > 3 else None
-                except Exception as e:
-                    pass  # 修复：原变量l未定义：添加具体异常类型ast_signin_date = None
-                try:
-                    consecutive = int(row[4]) if len(row) > 4 and row[4] else 0
-                except (ValueError, TypeError):
-                    consecutive = 0
-                # favor_value 现在是第7列 (index 6)
-                try:
-                    favor_value = int(row[6]) if len(row) > 6 and row[6] else 0
-                except (ValueError, TypeError):
-                    favor_value = 0
-                return {
-                    "user_id": row[0],
-                    "balance": balance,
-                    "bank_balance": bank_balance,
-                    "last_signin_date": last_signin_date,
-                    "consecutive_days": consecutive,
-                    "favor_value": favor_value
-                }
+                user_data = self._parse_user_row(row)
+                logger.info(f"【_get_user】用户 {user_id} 已存在，balance={user_data['balance']}, last_signin_date={user_data['last_signin_date']}")
+                return user_data
             else:
-                # 如果用户不存在，创建用户
+                # 创建新用户
+                logger.info(f"【_get_user】用户 {user_id} 不存在，创建新用户")
                 await db.execute(
                     "INSERT INTO users (user_id) VALUES (?)", (user_id,)
                 )
                 await db.commit()
+                logger.info(f"【_get_user】用户 {user_id} 创建成功")
                 
                 return {
                     "user_id": user_id,
@@ -202,6 +275,38 @@ class EconomyPlugin(Star):
                     "consecutive_days": 0,
                     "favor_value": 0
                 }
+    
+    def _parse_user_row(self, row) -> Dict:
+        """解析用户数据行"""
+        try:
+            balance = int(row[1]) if len(row) > 1 and row[1] else 0
+        except (ValueError, TypeError):
+            balance = 0
+        try:
+            bank_balance = int(row[2]) if len(row) > 2 and row[2] else 0
+        except (ValueError, TypeError):
+            bank_balance = 0
+        try:
+            last_signin_date = row[3] if len(row) > 3 else None
+        except Exception:
+            last_signin_date = None
+        try:
+            consecutive = int(row[4]) if len(row) > 4 and row[4] else 0
+        except (ValueError, TypeError):
+            consecutive = 0
+        try:
+            favor_value = int(row[6]) if len(row) > 6 and row[6] else 0
+        except (ValueError, TypeError):
+            favor_value = 0
+            
+        return {
+            "user_id": row[0],
+            "balance": balance,
+            "bank_balance": bank_balance,
+            "last_signin_date": last_signin_date,
+            "consecutive_days": consecutive,
+            "favor_value": favor_value
+        }
     
     async def _get_user_asset(self, user_id: str) -> Tuple[int, int, int, int]:
         """获取用户资产 (总, 现金, 银行, 股票)"""
@@ -209,2606 +314,1749 @@ class EconomyPlugin(Star):
         cash = user["balance"]
         bank = user["bank_balance"]
         
-        # 计算股票市值
-        async with aiosqlite.connect(self.db_path) as db:
-            cursor = await db.execute(
-                """SELECT COALESCE(SUM(sh.remaining * sp.current_price), 0)
-                   FROM stock_holdings sh
-                   JOIN stock_prices sp ON sh.stock_name = sp.stock_name
-                   WHERE sh.user_id = ? AND sh.remaining > 0 AND sp.delisted = 0""",
-                (user_id,)
-            )
-            row = await cursor.fetchone()
-            stock = int(row[0]) if row and len(row) > 0 and row[0] else 0
+        # 获取股票持仓
+        stocks = await self.stock_service.get_stock_holdings(user_id)
+        stock_value = 0
+        for name, holding in stocks.items():
+            price = await self.stock_service.get_stock_price(name)
+            stock_value += int(holding["quantity"] * price)
         
-        return cash + bank + stock, cash, bank, stock
+        total = cash + bank + stock_value
+        return total, cash, bank, stock_value
     
-    async def _get_all_assets(self) -> List[Tuple[str, int]]:
-        """获取所有用户资产（优化版：单次查询）"""
-        async with aiosqlite.connect(self.db_path) as db:
-            # 一次性查询所有用户的现金、银行和股票市值
-            cursor = await db.execute("""
-                SELECT 
-                    u.user_id,
-                    COALESCE(u.balance, 0) + COALESCE(u.bank_balance, 0) + COALESCE(s.stock_value, 0) as total
-                FROM users u
-                LEFT JOIN (
-                    SELECT 
-                        sh.user_id,
-                        SUM(sh.remaining * sp.current_price) as stock_value
-                    FROM stock_holdings sh
-                    JOIN stock_prices sp ON sh.stock_name = sp.stock_name
-                    WHERE sh.remaining > 0 AND sp.delisted = 0
-                    GROUP BY sh.user_id
-                ) s ON u.user_id = s.user_id
-            """)
-            rows = await cursor.fetchall()
-        
-        return [(row[0], int(row[1]) if row[1] else 0) for row in rows]
+    # ============== 基础功能命令 ==============
     
-    async def _get_rank(self, user_id: str) -> Tuple[int, float]:
-        """获取排名和百分位（优化版）"""
-        all_assets = await self._get_all_assets()
-        if not all_assets:
-            return 1, 0.0
-        
-        # 按资产排序
-        sorted_assets = sorted(all_assets, key=lambda x: x[1], reverse=True)
-        total = len(sorted_assets)
-        
-        # 查找用户排名
-        rank = 1
-        for i, (uid, asset) in enumerate(sorted_assets, 1):
-            if uid == user_id:
-                rank = i
-                break
-        
-        percentile = (rank - 1) / total if total > 0 else 0
-        return rank, percentile
-    
-    async def _get_nickname(self, user_id: str) -> Optional[str]:
-        """获取用户昵称"""
-        async with aiosqlite.connect(self.db_path) as db:
-            cursor = await db.execute(
-                "SELECT nickname FROM user_info WHERE user_id = ?",
-                (user_id,)
-            )
-            row = await cursor.fetchone()
-            return row[0] if row else None
-    
-    async def _update_nickname(self, user_id: str, nickname: str):
-        """更新昵称"""
-        if not nickname or nickname == user_id:
-            return
-        
-        async with aiosqlite.connect(self.db_path) as db:
-            await db.execute(
-                """INSERT INTO user_info (user_id, nickname, last_update)
-                   VALUES (?, ?, ?)
-                   ON CONFLICT(user_id) DO UPDATE SET nickname = ?, last_update = ?""",
-                (user_id, nickname, today_str(), nickname, today_str())
-            )
-            await db.commit()
-    
-    def _get_sender_name(self, event: AstrMessageEvent) -> str:
-        """获取发送者名称"""
-        try:
-            if hasattr(event, 'get_sender_name'):
-                name = event.get_sender_name()
-                if name and name != str(event.get_sender_id()):
-                    return name
-        except Exception as e:
-            logger.debug(f"获取昵称失败: {e}")
-        
-        try:
-            if hasattr(event, 'message_obj') and event.message_obj:
-                sender = event.message_obj.sender
-                if sender:
-                    nick = sender.get('nickname')
-                    if nick:
-                        return nick
-                    card = sender.get('card')
-                    if card:
-                        return card
-        except Exception as e:
-            logger.debug(f"获取昵称失败: {e}")
-        
-        return mask_id(str(event.get_sender_id()))
-    
-    def _parse_target(self, event: AstrMessageEvent) -> Optional[str]:
-        """解析@目标"""
-        msg = event.message_str
-        match = re.search(r'\[CQ:at,qq=(\d+)\]', msg)
-        if match:
-            return match.group(1)
-        
-        parts = msg.split()
-        if len(parts) >= 2:
-            potential = parts[1].replace("@", "").strip()
-            if potential.isdigit():
-                return potential
-        
-        return None
-    
-    # ============== 税收系统 ==============
-    async def _collect_tax(self) -> Optional[Tuple]:
-        """收取每日税收"""
-        return await self.tax_service.collect_tax()
-    
-    async def _force_collect_tax(self) -> Optional[Tuple]:
-        """强制收税（管理员用）"""
-        return await self.tax_service.force_collect_tax()
-    
-    async def _claim_tax_bonus(self, user_id: str) -> Tuple[int, int]:
-        """领取税收分红"""
-        return await self.tax_service.claim_tax_bonus(user_id)
-    
-    # ============== 命令处理 ==============
     @filter.command("签到")
     async def cmd_signin(self, event: AstrMessageEvent):
-        """签到命令"""
+        """每日签到 - 自动结算利息、领取工资、抽取塔罗牌、领取分红"""
         await self._ensure_db()
-        
-        # 收税
-        tax_result = await self._collect_tax()
-        
+
         user_id = str(event.get_sender_id())
         nickname = self._get_sender_name(event)
-        await self._update_nickname(user_id, nickname)
-        
-        today = today_str()
-        
-        rank, percentile = await self._get_rank(user_id)
-        
-        # 使用SigninService执行签到
-        signin_result = await self.signin_service.signin(user_id, percentile)
-        
-        # 检查是否已签到
-        if not signin_result["success"]:
-            yield event.plain_result(
-                f"⛔ {signin_result['message']}\n"
-                f"💰 当前余额：{format_num(signin_result['balance'])} 星声\n"
-                f"📅 连续签到：{signin_result['consecutive_days']} 天"
+
+        # ========== 签到前自动结算 ==========
+
+        # 1. 自动结算银行利息
+        bank_info = await self.bank_service.get_bank_info(user_id)
+        bank_before = bank_info["bank"]
+
+        # 2. 自动领取工资
+        salary_result = await self.work_service.claim_salary(user_id)
+
+        # 3. 自动抽取塔罗牌
+        tarot_result = await self.tarot_service.draw_tarot(user_id)
+
+        # 获取用户排名百分比（用于低保加成）
+        total, cash, bank, stock = await self._get_user_asset(user_id)
+        all_users = await self.stats_service.get_all_users_assets()
+        if len(all_users) > 1:
+            rank = sum(1 for u in all_users if u["total"] > total) + 1
+            percentile = rank / len(all_users)
+        else:
+            percentile = 0.5
+
+        # 执行签到
+        result = await self.signin_service.signin(user_id, percentile)
+
+        if result["success"]:
+            # 检查成就
+            new_achievements = await self.achievement_service.check_achievements(
+                user_id, "signin", {"consecutive": result["consecutive_days"]}
             )
-            return
-        
-        # 税收分红
-        tax_bonus, remaining_pool = await self._claim_tax_bonus(user_id)
-        total = signin_result["total"] + tax_bonus
-        new_balance = signin_result["balance"] + tax_bonus
-        
-        # 更新余额以包含税收分红
-        async with aiosqlite.connect(self.db_path) as db:
-            await db.execute(
-                "UPDATE users SET balance = ? WHERE user_id = ?",
-                (new_balance, user_id)
-            )
-            await db.commit()
-        
-        # 检查成就
-        new_achievements = await self.achievement_service.check_achievements(user_id, "signin", {"consecutive": signin_result["consecutive_days"]})
-        
-        # 显示新成就通知
-        achievement_msg = ""
-        if new_achievements:
-            achievement_msg = "\n" + "\n".join([
-                f"🏆 【新成就】{a['emoji']} {a['name']}\n   📝 {a['desc']}"
-                for a in new_achievements
+
+            # 获取更新后的银行余额（用于计算利息）
+            bank_info_after = await self.bank_service.get_bank_info(user_id)
+            bank_after = bank_info_after["bank"]
+            bank_interest = bank_after - bank_before
+
+            # 构建回复消息
+            lines = [
+                f"🌟 {nickname} 签到成功！",
+                f"📅 连续签到：{result['consecutive_days']} 天",
+                f"💰 基础奖励：{format_num(result['base'])} 星声"
+            ]
+
+            if result['bonus'] > 0:
+                lines.append(f"🎁 连续加成：+{format_num(result['bonus'])} 星声")
+            if result['signin_extra'] > 0:
+                lines.append(f"🔵 成就加成：+{format_num(result['signin_extra'])} 星声")
+            if result['yue_bonus'] > 0 or result['yue_bonus_fixed'] > 0:
+                lines.append(f"🌙 拜月加成：+{format_num(result['yue_bonus'] + result['yue_bonus_fixed'])} 星声")
+            if result['signin_favor_bonus'] > 0:
+                lines.append(f"💕 好感加成：+{result['signin_favor_bonus']} 好感值")
+
+            lines.extend([
+                f"💎 总计获得：{format_num(result['total'])} 星声",
+                f"💳 当前余额：{format_num(result['balance'])} 星声"
             ])
-        
-        # 抽塔罗牌
-        tarot_msg = ""
-        async with aiosqlite.connect(self.db_path) as db:
-            cursor = await db.execute(
-                "SELECT tarot_card FROM user_daily_tarot WHERE user_id = ? AND date = ?",
-                (user_id, today)
-            )
-            if not await cursor.fetchone():
-                card = random.choice(CONFIG.TAROT_CARDS)
-                desc = CONFIG.TAROT_DESC.get(card, "今日运势平稳")
-                effect = CONFIG.TAROT_EFFECTS.get(card, {})
-                
-                # 处理塔罗牌效果
-                effect_msg = ""
-                if effect:
-                    effect_type = effect.get("type")
-                    effect_value = effect.get("value")
-                    effect_desc = effect.get("desc")
-                    
-                    # 获得星声
-                    if effect_type == "balance_reward":
-                        if isinstance(effect_value, list):
-                            min_val, max_val = effect_value
-                            reward = random.randint(min_val, max_val)
-                        else:
-                            reward = effect_value
-                        await db.execute(
-                            "UPDATE users SET balance = balance + ? WHERE user_id = ?",
-                            (reward, user_id)
-                        )
-                        effect_msg = f"\n🎁 效果：{effect_desc}\n实际获得 {reward} 星声"
-                    
-                    # 失去星声（按总资产比例）
-                    elif effect_type == "balance_penalty":
-                        # 获取用户总资产
-                        cursor = await db.execute(
-                            "SELECT balance + bank_balance + COALESCE((SELECT SUM(quantity * buy_price) FROM stock_holdings WHERE user_id = ?), 0) as total_assets FROM users WHERE user_id = ?",
-                            (user_id, user_id)
-                        )
-                        row = await cursor.fetchone()
-                        total_assets = row[0] if row and row[0] else 0
-                        
-                        if isinstance(effect_value, list):
-                            min_val, max_val = effect_value
-                            penalty_rate = random.uniform(min_val, max_val)
-                        else:
-                            penalty_rate = effect_value
-                        
-                        # 按比例计算扣除金额
-                        penalty = int(total_assets * penalty_rate)
-                        
-                        await db.execute(
-                            "UPDATE users SET balance = balance - ? WHERE user_id = ?",
-                            (penalty, user_id)
-                        )
-                        effect_msg = f"\n🎁 效果：{effect_desc}\n总资产 {format_num(total_assets)}，实际失去 {format_num(penalty)} 星声（{penalty_rate*100:.1f}%）"
-                    
-                    # 获得好感值
-                    elif effect_type == "favor_value_reward":
-                        if isinstance(effect_value, list):
-                            min_val, max_val = effect_value
-                            favor_reward = random.randint(min_val, max_val)
-                        else:
-                            favor_reward = effect_value
-                        await db.execute(
-                            "UPDATE users SET favor_value = COALESCE(favor_value, 0) + ? WHERE user_id = ?",
-                            (favor_reward, user_id)
-                        )
-                        effect_msg = f"\n🎁 效果：{effect_desc}\n实际获得 {favor_reward} 点好感值"
 
-                    # 扣除好感值
-                    elif effect_type == "favor_value_penalty":
-                        if isinstance(effect_value, list):
-                            min_val, max_val = effect_value
-                            favor_penalty = random.randint(min_val, max_val)
-                        else:
-                            favor_penalty = effect_value
-                        await db.execute(
-                            "UPDATE users SET favor_value = COALESCE(favor_value, 0) - ? WHERE user_id = ?",
-                            (favor_penalty, user_id)
-                        )
-                        effect_msg = f"\n🎁 效果：{effect_desc}\n实际扣除 {favor_penalty} 点好感值"
-                    
-                    # 持仓股票立即上涨（随机一只）
-                    elif effect_type == "stock_price_up":
-                        if isinstance(effect_value, list):
-                            min_val, max_val = effect_value
-                            increase_rate = random.uniform(min_val, max_val)
-                        else:
-                            increase_rate = effect_value
-                        # 获取用户持仓股票
-                        cursor = await db.execute(
-                            "SELECT stock_name, quantity FROM stock_holdings WHERE user_id = ? AND quantity > 0",
-                            (user_id,)
-                        )
-                        holdings = await cursor.fetchall()
-                        if holdings:
-                            # 随机选择一只持仓股票
-                            selected_stock = random.choice(holdings)
-                            stock_name, quantity = selected_stock
-                            # 获取当前股价
-                            cursor = await db.execute(
-                                "SELECT current_price FROM stock_prices WHERE stock_name = ?",
-                                (stock_name,)
-                            )
-                            row = await cursor.fetchone()
-                            if row:
-                                current_price = row[0]
-                                new_price = current_price * (1 + increase_rate)
-                                await db.execute(
-                                    "UPDATE stock_prices SET current_price = ? WHERE stock_name = ?",
-                                    (new_price, stock_name)
-                                )
-                                effect_msg = f"\n🎁 效果：{effect_desc}\n【{stock_name}】上涨 {increase_rate*100:.1f}%"
-                        else:
-                            effect_msg = f"\n🎁 效果：{effect_desc}\n但你没有持仓股票"
+            # 显示银行利息结算
+            if bank_interest > 0:
+                lines.append(f"🏦 银行利息：+{format_num(bank_interest)} 星声（利率{bank_info_after['rate_pct']}%）")
 
-                    # 持仓股票立即下跌（随机一只）
-                    elif effect_type == "stock_price_down":
-                        if isinstance(effect_value, list):
-                            min_val, max_val = effect_value
-                            decrease_rate = random.uniform(min_val, max_val)
-                        else:
-                            decrease_rate = effect_value
-                        # 获取用户持仓股票
-                        cursor = await db.execute(
-                            "SELECT stock_name, quantity FROM stock_holdings WHERE user_id = ? AND quantity > 0",
-                            (user_id,)
-                        )
-                        holdings = await cursor.fetchall()
-                        if holdings:
-                            # 随机选择一只持仓股票
-                            selected_stock = random.choice(holdings)
-                            stock_name, quantity = selected_stock
-                            # 获取当前股价
-                            cursor = await db.execute(
-                                "SELECT current_price FROM stock_prices WHERE stock_name = ?",
-                                (stock_name,)
-                            )
-                            row = await cursor.fetchone()
-                            if row:
-                                current_price = row[0]
-                                new_price = max(1, current_price * (1 - decrease_rate))
-                                await db.execute(
-                                    "UPDATE stock_prices SET current_price = ? WHERE stock_name = ?",
-                                    (new_price, stock_name)
-                                )
-                                effect_msg = f"\n🎁 效果：{effect_desc}\n【{stock_name}】下跌 {decrease_rate*100:.1f}%"
-                        else:
-                            effect_msg = f"\n🎁 效果：{effect_desc}\n但你没有持仓股票"
-                    
-                    # 失去工作
-                    elif effect_type == "lose_job":
-                        # 检查用户是否有工作
-                        try:
-                            cursor = await db.execute(
-                                "SELECT work_name FROM user_work WHERE user_id = ?",
-                                (user_id,)
-                            )
-                            row = await cursor.fetchone()
-                            if row:
-                                work_name = row[0]
-                                await db.execute(
-                                    "DELETE FROM user_work WHERE user_id = ?",
-                                    (user_id,)
-                                )
-                                effect_msg = f"\n🎁 效果：{effect_desc}\n你失去了工作：{work_name}"
-                            else:
-                                effect_msg = f"\n🎁 效果：{effect_desc}\n但你现在是无业游民"
-                        except Exception as e:
-                            pass  # 修复：原变量e未定义：添加具体异常类型ffect_msg = f"\n🎁 效果：{effect_desc}\n但你现在是无业游民"
-                    
-                    # 占卜次数增加
-                    elif effect_type == "lottery_extra":
-                        # 记录额外的占卜次数到用户数据
-                        await db.execute(
-                            "INSERT OR REPLACE INTO user_lottery_extra (user_id, extra_count, date) VALUES (?, COALESCE((SELECT extra_count FROM user_lottery_extra WHERE user_id = ? AND date = ?), 0) + ?, ?)",
-                            (user_id, user_id, today, effect_value, today)
-                        )
-                        effect_msg = f"\n🎁 效果：{effect_desc}"
-                    
-                    # 其他效果
-                    else:
-                        effect_msg = f"\n🎁 效果：{effect_desc}"
-                
-                await db.execute(
-                    "INSERT INTO user_daily_tarot (user_id, date, tarot_card, draw_time) VALUES (?, ?, ?, ?)",
-                    (user_id, today, card, get_beijing_time().strftime("%Y-%m-%d %H:%M:%S"))
-                )
-                await db.commit()
-                
-                tarot_msg = f"\n═══════════════════\n🔮 今日塔罗：【{card}】\n{desc}{effect_msg}"
+            # 显示工资领取
+            if salary_result.get("success"):
+                lines.append(f"💼 工资收入：+{format_num(salary_result['final_earnings'])} 星声（工作{salary_result['hours']}小时）")
+                if salary_result.get('qian_bonus', 0) > 0:
+                    lines.append(f"⚡ 千衢结社加成：+{format_num(salary_result['qian_bonus'])} 星声")
+
+            # 显示塔罗牌抽取结果
+            if tarot_result.get("success"):
+                if tarot_result.get("already_drawn"):
+                    lines.append(f"🎴 今日塔罗：{tarot_result['card_name']}（已抽取）")
+                else:
+                    lines.append(f"🎴 塔罗牌：{tarot_result['card_name']}")
+                    # 显示塔罗牌台词
+                    if tarot_result.get("desc"):
+                        lines.append(f"   📜 {tarot_result['desc']}")
+                    # 显示效果
+                    if tarot_result.get("effect_result"):
+                        lines.append(f"   ✨ {tarot_result['effect_result']}")
+
+            # 领取税收奖池分红（tax_service已直接更新余额）
+            tax_bonus, remaining_pool = await self.tax_service.claim_tax_bonus(user_id)
+            if tax_bonus > 0:
+                lines.append(f"🎁 税收分红：+{format_num(tax_bonus)} 星声（奖池剩余{format_num(remaining_pool)}）")
+
+            # 显示新成就
+            if new_achievements:
+                lines.append("\n🏆 【新成就】")
+                for a in new_achievements:
+                    lines.append(f"{a['emoji']} {a['name']}\n   📝 {a['desc']}")
+
+            # 重新查询实际余额（包含所有收入）
+            total, cash, bank, stock = await self._get_user_asset(user_id)
+            lines.append(f"\n💳 实际余额：{format_num(cash)} 星声")
+            lines.append(f"🏦 银行存款：{format_num(bank)} 星声")
+            lines.append(f"📈 总资产：{format_num(total)} 星声")
+
+            yield event.plain_result("\n".join(lines))
+        else:
+            yield event.plain_result(f"❌ {result['message']}")
+
+    @filter.command("资产排行榜")
+    async def cmd_asset_ranking(self, event: AstrMessageEvent):
+        """查看资产排行榜前十名"""
+        await self._ensure_db()
+
+        top10 = await self.stats_service.get_top10_assets()
         
-        # 构建消息
-        wealth_icon = "🎁" if percentile < 0.1 else "🎁" if percentile < 0.5 else "🎁"
+        if not top10:
+            yield event.plain_result("📊 暂无资产数据")
+            return
+
+        lines = ["🏆 资产排行榜 TOP10", "═══════════════════"]
         
-        lines = [
-            f"⛔ 签到成功！{wealth_icon} 财富排名：第{rank}名（前{int(percentile*100)}%）",
-            f"💰 基础：{signin_result['base']}星声（低保加成{int(percentile*100)}%）",
-            f"🔥 连续加成：{signin_result['bonus']}星声（{signin_result['consecutive_days']}天×{1 + (percentile * 0.5):.1f}倍）"
-        ]
+        medals = ["🥇", "🥈", "🥉", "4️⃣", "5️⃣", "6️⃣", "7️⃣", "8️⃣", "9️⃣", "🔟"]
         
-        # 显示成就加成
-        # 蓝色成就：每日签到额外星声
-        if signin_result.get('signin_extra', 0) > 0:
-            lines.append(f"🔵 蓝色成就加成：+{signin_result['signin_extra']}星声")
-        
-        # 彩色成就：每日签到额外好感值
-        if signin_result.get('signin_favor_bonus', 0) > 0:
-            lines.append(f"💰 彩色成就加成：+{signin_result['signin_favor_bonus']}好感值")
-        
-        # 拜月结社福利
-        if signin_result.get('yue_bonus_fixed', 0) > 0 or signin_result.get('yue_bonus', 0) > 0:
-            yue_total = signin_result.get('yue_bonus_fixed', 0) + signin_result.get('yue_bonus', 0)
-            lines.append(f"🌙 拜月结社福利：+{yue_total}星声")
-        
-        lines.append(f"🎁 赛季：S{CONFIG.CURRENT_SEASON}")
-        
-        if tax_bonus > 0:
-            lines.append(f"🏛️️ 富豪税分红：+{tax_bonus}星声（奖池剩余{remaining_pool}）")
-        
-        if tax_result and len(tax_result) >= 5:
-            _, _, _, extra_rate, ratio = tax_result
-            if ratio > 1:
-                lines.append(f"⚖️ 贫富差距指数：{ratio:.1f}（调节税+{extra_rate*100:.1f}%）")
-        
-        # 重新查询最终余额（塔罗牌效果可能已修改余额）
-        async with aiosqlite.connect(self.db_path) as db:
-            cursor = await db.execute(
-                "SELECT balance FROM users WHERE user_id = ?",
-                (user_id,)
-            )
-            row = await cursor.fetchone()
-            final_balance = row[0] if row else new_balance
+        for idx, user in enumerate(top10):
+            medal = medals[idx] if idx < len(medals) else f"{idx+1}."
+            user_id = user["user_id"]
+            total = user["total"]
+            cash = user["cash"]
+            bank = user["bank"]
+            stock = user["stock"]
+            
+            lines.append(f"{medal} {mask_id(user_id)}")
+            lines.append(f"   💎 总资产：{format_num(total)} 星声")
+            lines.append(f"   💳 {format_num(cash)} | 🏦 {format_num(bank)} | 📈 {format_num(stock)}")
+            lines.append("")
+
+        # 添加统计信息
+        total_wealth = await self.stats_service.get_total_wealth()
+        player_count = await self.stats_service.get_player_count()
+        avg_wealth = await self.stats_service.get_average_wealth()
         
         lines.extend([
             "═══════════════════",
-            f"💰 共计：{total}星声",
-            f"💰 余额：{format_num(final_balance)}星声"
+            f"📊 服务器统计：",
+            f"   玩家总数：{player_count} 人",
+            f"   经济总量：{format_num(total_wealth)} 星声",
+            f"   人均资产：{format_num(int(avg_wealth))} 星声"
         ])
-        
-        if tarot_msg:
-            lines.append(tarot_msg)
-        
-        yield event.plain_result("\n".join(lines))
-    
-    @filter.command("签到帮助")
-    async def cmd_signin_help(self, event: AstrMessageEvent):
-        """经济系统帮助"""
-        help_text = """📋 指令列表
 
-💰 基础：/签到 /余额 /转账 @用户 金额 /资产排行榜 /经济 /税收
-🏦 银行：/银行 /存款 金额 /取款 金额
-🛍️ 商店：/商店 /购买 商品 数量 /背包 /使用 物品 /占卜概率 /Allin
-💼 工作：/找工作 /应聘 工作名 /工作状态 /领工资
-📈 股票：/股市 /买入 股票 数量 /卖出 股票 数量 /持仓 /创立公司 名称 价格 描述 /宣告破产 公司 /研发 公司 金额 /股东 股票 /k线 股票
-🏛️️ 结社：/结社 /加入结社 名称 /我的结社
-🎁 好感：/好感度 /好感度排行
-🎁 成就：/成就 /塔罗牌
-🔧 管理：/高级签到帮助"""
-        yield event.plain_result(help_text)
-    
-    @filter.command("高级签到帮助")
-    async def cmd_advanced_signin_help(self, event: AstrMessageEvent):
-        """管理员帮助"""
-        user_id = str(event.get_sender_id())
+        yield event.plain_result("\n".join(lines))
+
+    @filter.command("经济")
+    async def cmd_economy_stats(self, event: AstrMessageEvent):
+        """查看经济统计（最近7天）"""
+        await self._ensure_db()
+
+        stats = await self.stats_service.get_economy_stats(days=7)
+        tax_stats = await self.tax_service.get_tax_stats(days=7)
+
+        lines = ["📈 经济统计（最近7天）", "═══════════════════"]
         
+        lines.extend([
+            f"👥 玩家总数：{stats['player_count']} 人",
+            f"💰 经济总量：{format_num(stats['total_wealth'])} 星声",
+            f"📊 人均资产：{format_num(int(stats['avg_wealth']))} 星声",
+            f"📈 资产中位数：{format_num(stats['median_wealth'])} 星声",
+            "",
+            f"💸 税收总额：{format_num(tax_stats['total_tax'])} 星声",
+            f"🎁 奖池总额：{format_num(tax_stats['total_bonus'])} 星声"
+        ])
+
+        # 显示每日税收详情
+        if tax_stats['daily_stats']:
+            lines.extend(["", "📅 每日税收详情："])
+            for day in tax_stats['daily_stats'][:7]:
+                lines.append(f"   {day['date']}: {format_num(day['total_tax'])} 星声")
+
+        yield event.plain_result("\n".join(lines))
+
+    @filter.command("收税")
+    async def cmd_collect_tax(self, event: AstrMessageEvent):
+        """管理员强制收税"""
+        await self._ensure_db()
+
+        user_id = str(event.get_sender_id())
+
         # 检查是否为管理员
         if user_id not in CONFIG.ADMIN_IDS:
-            yield event.plain_result("? 权限不足！此命令仅管理员可用")
+            yield event.plain_result("❌ 权限不足！此命令仅管理员可用")
             return
-        
-        help_text = """🔧 管理员指令
 
-系统：/admin reset 用户 /admin add 用户 金额 /admin remove 用户 金额 /admin clear
-统计：/admin stats /admin users /admin logs
-经济：/admin tax 税率 /admin bank 利率 /admin shop 商品 价格 数量
-股票：/admin stock add 名称 价格 描述 /admin stock remove 名称 /admin stock price 名称 价格
-商店：/admin shop add 商品名 价格 限购 好感值 描述 /admin shop remove 商品名 /admin shop edit 商品名 属性 值
-好感：/admin favor add 用户 数量 /admin favor remove 用户 数量 /admin favor reset 用户
-成就：/所有人成就 /授予成就 用户ID/所有人 成就ID /重置签到 用户ID/所有人
-赛季：/新赛季 密码"""
-        yield event.plain_result(help_text)
-    
+        result = await self.tax_service.force_collect_tax()
+
+        if result is None:
+            yield event.plain_result("⚠️ 今日已收税，如需重新收税请先删除记录")
+            return
+
+        lines = [
+            "✅ 强制收税完成！",
+            "═══════════════════",
+            f"💰 总税收：{format_num(result['total_tax'])} 星声",
+            f"🎁 奖池：{format_num(result['bonus_pool'])} 星声",
+            f"👥 玩家数：{result['player_count']} 人",
+            f"📈 资产中位数：{format_num(result['median_wealth'])} 星声",
+            ""
+        ]
+
+        # 显示前十名税收详情
+        if result['top10_details']:
+            lines.append("🏆 前十名税收详情：")
+            for detail in result['top10_details']:
+                lines.append(
+                    f"   第{detail['rank']}名 {mask_id(detail['user_id'])}: "
+                    f"-{format_num(detail['tax'])} 星声 ({int(detail['rate']*100)}%)"
+                )
+
+        # 显示额外税收详情
+        extra_count = len(result['extra_tax_details'])
+        if extra_count > 0:
+            lines.append(f"\n⚖️ 额外平衡税收：{extra_count} 人")
+
+        yield event.plain_result("\n".join(lines))
+
+    @filter.command("昨日税收")
+    async def cmd_yesterday_tax(self, event: AstrMessageEvent):
+        """查看昨日税收"""
+        await self._ensure_db()
+
+        user_id = str(event.get_sender_id())
+
+        # 检查是否为管理员
+        if user_id not in CONFIG.ADMIN_IDS:
+            yield event.plain_result("❌ 权限不足！此命令仅管理员可用")
+            return
+
+        yesterday = (get_beijing_time() - timedelta(days=1)).strftime("%Y-%m-%d")
+
+        # 使用tax_service获取税收统计
+        stats = await self.tax_service.get_tax_stats(days=2)
+        daily_stats = stats.get('daily_stats', [])
+
+        # 查找昨日数据
+        yesterday_stats = None
+        for day in daily_stats:
+            if day['date'] == yesterday:
+                yesterday_stats = day
+                break
+
+        if not yesterday_stats:
+            yield event.plain_result("📊 昨日无税收记录")
+            return
+
+        lines = [
+            f"📊 昨日税收 ({yesterday})",
+            "═══════════════════",
+            f"💰 总税收：{format_num(yesterday_stats['total_tax'])} 星声",
+            f"🎁 奖池：{format_num(yesterday_stats['bonus_pool'])} 星声",
+            f"👥 玩家数：{yesterday_stats['player_count']} 人",
+            f"📈 资产中位数：{format_num(yesterday_stats['median_wealth'])} 星声"
+        ]
+
+        yield event.plain_result("\n".join(lines))
+
+    @filter.command("发放补贴")
+    async def cmd_give_subsidy(self, event: AstrMessageEvent):
+        """发放补贴给指定用户"""
+        await self._ensure_db()
+
+        user_id = str(event.get_sender_id())
+
+        # 检查是否为管理员
+        if user_id not in CONFIG.ADMIN_IDS:
+            yield event.plain_result("❌ 权限不足！此命令仅管理员可用")
+            return
+
+        args = event.message_str.split()
+        if len(args) < 3:
+            yield event.plain_result("❌ 用法：/发放补贴 @用户/QQ号 [金额]")
+            return
+
+        # 提取目标用户
+        target_user = self._extract_target_user(event)
+        if not target_user:
+            yield event.plain_result("❌ 请指定目标用户（@用户或输入QQ号）")
+            return
+
+        # 提取金额
+        try:
+            amount = int(args[-1])
+        except ValueError:
+            yield event.plain_result("❌ 请输入有效的金额")
+            return
+
+        if amount <= 0:
+            yield event.plain_result("❌ 金额必须大于0")
+            return
+
+        # 使用admin_service发放补贴
+        result = await self.admin_service.give_subsidy(target_user, amount)
+
+        if result['success']:
+            yield event.plain_result(
+                f"✅ 补贴发放成功！\n"
+                f"👤 用户：{mask_id(target_user)}\n"
+                f"💰 金额：{format_num(amount)} 星声\n"
+                f"💳 新余额：{format_num(result['new_balance'])} 星声"
+            )
+        else:
+            yield event.plain_result(f"❌ {result['message']}")
+
+    @filter.command("扣除资产")
+    async def cmd_deduct_asset(self, event: AstrMessageEvent):
+        """扣除用户资产"""
+        await self._ensure_db()
+
+        user_id = str(event.get_sender_id())
+
+        # 检查是否为管理员
+        if user_id not in CONFIG.ADMIN_IDS:
+            yield event.plain_result("❌ 权限不足！此命令仅管理员可用")
+            return
+
+        args = event.message_str.split()
+        if len(args) < 3:
+            yield event.plain_result("❌ 用法：/扣除资产 @用户/QQ号 [金额]")
+            return
+
+        # 提取目标用户
+        target_user = self._extract_target_user(event)
+        if not target_user:
+            yield event.plain_result("❌ 请指定目标用户（@用户或输入QQ号）")
+            return
+
+        # 提取金额
+        try:
+            amount = int(args[-1])
+        except ValueError:
+            yield event.plain_result("❌ 请输入有效的金额")
+            return
+
+        if amount <= 0:
+            yield event.plain_result("❌ 金额必须大于0")
+            return
+
+        # 使用admin_service扣除资产
+        result = await self.admin_service.deduct_asset(target_user, amount)
+
+        if result['success']:
+            yield event.plain_result(
+                f"✅ 资产扣除成功！\n"
+                f"👤 用户：{mask_id(target_user)}\n"
+                f"💰 扣除金额：{format_num(amount)} 星声\n"
+                f"💳 新余额：{format_num(result['new_balance'])} 星声"
+            )
+        else:
+            yield event.plain_result(f"❌ {result['message']}")
+
+    @filter.command("赛季")
+    async def cmd_season_info(self, event: AstrMessageEvent):
+        """查看当前赛季信息"""
+        await self._ensure_db()
+
+        user_id = str(event.get_sender_id())
+
+        # 检查是否为管理员
+        if user_id not in CONFIG.ADMIN_IDS:
+            yield event.plain_result("❌ 权限不足！此命令仅管理员可用")
+            return
+
+        season = await self.config_manager.get_season()
+
+        lines = [
+            "🎮 当前赛季信息",
+            "═══════════════════",
+            f"📅 当前赛季：第 {season} 赛季",
+            "",
+            "💡 使用 /新赛季 开启新赛季",
+            "⚠️ 开启新赛季将重置所有用户数据！"
+        ]
+
+        yield event.plain_result("\n".join(lines))
+
     @filter.command("新赛季")
     async def cmd_new_season(self, event: AstrMessageEvent):
         """开启新赛季"""
+        await self._ensure_db()
+
         user_id = str(event.get_sender_id())
-        
+
         # 检查是否为管理员
         if user_id not in CONFIG.ADMIN_IDS:
-            yield event.plain_result("? 权限不足！此命令仅管理员可用")
+            yield event.plain_result("❌ 权限不足！此命令仅管理员可用")
             return
-        
-        # 获取密码
-        args = event.message_str.split()
-        if len(args) < 2:
-            yield event.plain_result("? 请输入密码：/新赛季 <密码>")
-            return
-        
-        password = args[1]
-        if password != CONFIG.SEASON_PASSWORD:
-            yield event.plain_result("? 密码错误！")
-            return
-        
-        await self._ensure_db()
-        
-        # 开始新赛季
-        new_season = CONFIG.CURRENT_SEASON + 1
-        
-        async with aiosqlite.connect(self.db_path) as db:
-            # 清空抽卡资源
-            await db.execute("DELETE FROM user_daily_tarot")
-            
-            # 清空银行存款
-            await db.execute("UPDATE users SET bank_balance = 0")
-            
-            # 清空股票持仓
-            await db.execute("DELETE FROM stock_holdings")
-            
-            # 清空工作状态
-            await db.execute("DELETE FROM user_work")
-            
-            # 清空背包
-            await db.execute("DELETE FROM inventory")
-            
-            # 获取所有用户
-            cursor = await db.execute("SELECT user_id FROM users")
-            users = await cursor.fetchall()
-            
-            # 给所有用户发放赛季成就
-            for (uid,) in users:
-                achievement_id = f"season_{new_season-1}_pioneer"
-                await self.achievement_service._grant_achievement(db, uid, achievement_id)
-            
-            await db.commit()
-        
-        # 使用ConfigManager更新赛季数（替代修改源码）
+
+        # 获取当前赛季
+        current_season = await self.config_manager.get_season()
+        new_season = current_season + 1
+
+        # 开启新赛季
+        await self.admin_service.start_new_season()
         await self.config_manager.set_season(new_season)
 
-        yield event.plain_result(f"? 新赛季开启成功！现在是 S{new_season} 赛季\n\n" +
-                               "🎁 赛季重置内容：\n" +
-                               "- 清空所有用户的抽卡资源\n" +
-                               "- 清空所有用户的银行存款\n" +
-                               "- 清空所有用户的股票持仓\n" +
-                               "- 清空所有用户的工作状态\n" +
-                               "- 清空所有用户的背包物品\n\n" +
-                               "🎁 发放成就：\n" +
-                               f"- 给所有用户发放金色成就 \"S{new_season-1}先行者\"\n\n" +
-                               "🎁 保留内容：\n" +
-                               "- 连续签到天数\n" +
-                               "- 所有成就记录")
-    
-    @filter.command("admin")
-    async def cmd_admin(self, event: AstrMessageEvent):
-        """管理员命令"""
-        user_id = str(event.get_sender_id())
-        
-        # 检查是否为管理员
-        if user_id not in CONFIG.ADMIN_IDS:
-            yield event.plain_result("? 权限不足！此命令仅管理员可用")
-            return
-        
-        args = event.message_str.split()
-        if len(args) < 2:
-            yield event.plain_result("⚠️ 用法：/admin <子命令> [参数]")
-            return
-        
-        subcommand = args[1]
-        
-        # 处理商店相关命令
-        if subcommand == "shop":
-            if len(args) < 3:
-                yield event.plain_result("? 用法：/admin shop <add/remove/edit> [参数]")
-                return
-            
-            shop_cmd = args[2]
-            
-            # 上架新商品
-            if shop_cmd == "add":
-                if len(args) < 7:
-                    yield event.plain_result("? 用法：/admin shop add <商品名> <价格> <每日限购> <好感值> <描述>")
-                    return
-                
-                item_name = args[3]
-                try:
-                    price = int(args[4])
-                    daily_limit = int(args[5])
-                    favor_value = int(args[6])
-                except Exception as e:
-                    pass  # 修复：原变量y未定义：添加具体异常类型ield event.plain_result("? 价格、每日限购和好感值必须是整数！")
-                    return
-                
-                desc = " ".join(args[7:])
-                
-                # 使用数据库替代修改源码
-                await self.config_manager.set(f"shop_item_{item_name}", {
-                    "price": price,
-                    "daily_limit": daily_limit,
-                    "favor_value": favor_value,
-                    "desc": desc
-                })
-                
-                yield event.plain_result(f"? 商品上架成功！\n商品：{item_name}\n价格：{price}星声\n每日限购：{daily_limit}个\n好感值：{favor_value}点\n描述：{desc}")
-            
-            # 下架商品
-            elif shop_cmd == "remove":
-                if len(args) < 4:
-                    yield event.plain_result("? 用法：/admin shop remove <商品名>")
-                    return
-
-                item_name = args[3]
-
-                # 从数据库删除商品
-                await self.config_manager.set(f"shop_item_{item_name}", None)
-
-                yield event.plain_result(f"? 商品下架成功！\n商品：{item_name}")
-            
-            # 修改商品属性
-            elif shop_cmd == "edit":
-                if len(args) < 6:
-                    yield event.plain_result("? 用法：/admin shop edit <商品名> <属性> <值>")
-                    return
-                
-                item_name = args[3]
-                attribute = args[4]
-                value = args[5]
-                
-                # 验证属性
-                valid_attributes = ["price", "daily_limit"]
-                if attribute not in valid_attributes:
-                    yield event.plain_result(f"? 无效的属性！有效属性：{', '.join(valid_attributes)}")
-                    return
-                
-                # 验证值
-                try:
-                    if attribute in ["price", "daily_limit"]:
-                        int(value)
-                except Exception as e:
-                    yield event.plain_result("? 值必须是整数！")
-                    return
-
-                # 从数据库获取商品并修改属性
-                item_data = await self.config_manager.get(f"shop_item_{item_name}")
-                if item_data:
-                    item_data[attribute] = int(value)
-                    await self.config_manager.set(f"shop_item_{item_name}", item_data)
-                    yield event.plain_result(f"? 商品属性修改成功！\n商品：{item_name}\n属性：{attribute}\n新值：{value}")
-                else:
-                    yield event.plain_result(f"? 商品不存在：{item_name}")
-            
-            else:
-                yield event.plain_result("? 无效的商店命令！可用命令：add, remove, edit")
-        
-        else:
-            yield event.plain_result("? 无效的管理员命令！")
-
-    @filter.command("余额")
-    async def cmd_balance(self, event: AstrMessageEvent):
-        """查看余额"""
-        await self._ensure_db()
-
-        user_id = str(event.get_sender_id())
-        nickname = self._get_sender_name(event)
-        await self._update_nickname(user_id, nickname)
-
-        today = today_str()
-        total, cash, bank, stock = await self._get_user_asset(user_id)
-        user = await self._get_user(user_id)
-
-        status = "? 今日已签到" if user["last_signin_date"] == today else "? 今日未签到"
-
-        # 获取好感度和好感值
-        async with aiosqlite.connect(self.db_path) as db:
-            cursor = await db.execute(
-                "SELECT COALESCE(favor_value, 0) FROM users WHERE user_id = ?",
-                (user_id,)
-            )
-            row = await cursor.fetchone()
-            favor_value = int(row[0]) if row else 0
-
-            # 计算好感度
-            cursor = await db.execute(
-                "SELECT SUM(COALESCE(favor_value, 0)) FROM users WHERE favor_value > 0"
-            )
-            total_favor_row = await cursor.fetchone()
-            total_favor = int(total_favor_row[0]) if total_favor_row and total_favor_row[0] else 1
-            favor_level = int((favor_value / total_favor) * 520) if total_favor > 0 else 0
-
-        favor_info = f"\n🎁 好感值：{favor_value}  好感度：{favor_level}"
-
-        msg = (
-            f"👤 [{nickname}] 的资产\n"
-            f"💵 抽卡资源：{format_num(cash)} 星声\n"
-            f"🏦 存款：{format_num(bank)} 星声\n"
-            f"📈 股票：{format_num(stock)} 星声\n"
-            f"💰 总资产：{format_num(total)} 星声\n"
-            f"📅 连续签到：{user['consecutive_days']}天\n"
-            f"📋 状态：{status}{favor_info}"
-        )
-
-        # 检查财富成就
-        await self.achievement_service.check_achievements(user_id, "asset_check", {"total": total})
-
-        yield event.plain_result(msg)
-    
-    @filter.command("转账")
-    async def cmd_transfer(self, event: AstrMessageEvent):
-        """转账命令"""
-        await self._ensure_db()
-        
-        sender_id = str(event.get_sender_id())
-        parts = event.message_str.split()
-        
-        if len(parts) < 3:
-            yield event.plain_result("💡 用法：/转账 @用户 金额")
-            return
-        
-        try:
-            amount = int(parts[-1])
-            if amount <= 0:
-                raise ValueError()
-        except (ValueError, IndexError):
-            yield event.plain_result("❌ 金额必须是正整数！\n💡 用法：/转账 @用户 金额")
-            return
-        
-        target_id = self._parse_target(event)
-        if not target_id:
-            yield event.plain_result("? 请@要转账的用户！")
-            return
-        
-        if sender_id == target_id:
-            yield event.plain_result("? 不能给自己转账！")
-            return
-        
-        # 使用原子操作检查并扣减余额，防止并发透支
-        async with aiosqlite.connect(self.db_path) as db:
-            # 开启事务
-            await db.execute("BEGIN IMMEDIATE")
-            try:
-                # 检查余额并扣减（原子操作）
-                cursor = await db.execute(
-                    "SELECT balance FROM users WHERE user_id = ?",
-                    (sender_id,)
-                )
-                row = await cursor.fetchone()
-                sender_balance = row[0] if row else 0
-                
-                if sender_balance < amount:
-                    await db.execute("ROLLBACK")
-                    yield event.plain_result(f"? 余额不足！当前：{format_num(sender_balance)}星声")
-                    return
-                
-                # 扣减发送者余额
-                await db.execute(
-                    "UPDATE users SET balance = balance - ? WHERE user_id = ?",
-                    (amount, sender_id)
-                )
-                
-                # 增加接收者余额
-                await db.execute(
-                    """INSERT INTO users (user_id, balance) VALUES (?, ?)
-                       ON CONFLICT(user_id) DO UPDATE SET balance = balance + ?""",
-                    (target_id, amount, amount)
-                )
-                
-                await db.execute("COMMIT")
-                new_balance = sender_balance - amount
-            except Exception as e:
-                await db.execute("ROLLBACK")
-                logger.error(f"转账失败: {e}")
-                yield event.plain_result("? 转账失败，请稍后重试")
-                return
-        
         yield event.plain_result(
-            f"⛔ 转账成功！\n"
-            f"🎁 转出：{format_num(amount)}星声\n"
-            f"👤 给：{mask_id(target_id)}\n"
-            f"🎁 您剩余：{format_num(new_balance)}星声"
-        )
-    
-    @filter.command("资产排行榜")
-    async def cmd_ranking(self, event: AstrMessageEvent):
-        """资产排行榜"""
-        await self._ensure_db()
-        await self._collect_tax()
-        
-        user_id = str(event.get_sender_id())
-        
-        # 获取昵称映射
-        async with aiosqlite.connect(self.db_path) as db:
-            cursor = await db.execute("SELECT user_id, nickname FROM user_info WHERE nickname IS NOT NULL")
-            name_map = {str(row[0]): row[1] for row in await cursor.fetchall()}
-        
-        # 获取所有资产
-        all_assets = await self._get_all_assets()
-        sorted_assets = sorted(all_assets, key=lambda x: x[1], reverse=True)
-        
-        if not sorted_assets:
-            yield event.plain_result("🎁 暂无资产数据")
-            return
-        
-        medals = ["🥇", "🥈", "🥉", "4️⃣", "5️⃣", "6️⃣", "7️⃣", "8️⃣", "9️⃣", "🔟"]
-        lines = ["🎁 资产排行榜 Top 10", "═══════════════════"]
-
-        for i, (uid, total) in enumerate(sorted_assets[:10]):
-            medal = medals[i] if i < len(medals) else f"{i+1}."
-            name = name_map.get(uid, mask_id(uid))
-            is_self = uid == user_id
-            name_display = f"{name} (你)" if is_self else name
-
-            # 获取详细资产
-            _, cash, bank, stock = await self._get_user_asset(uid)
-
-            lines.append(f"{medal} {name_display}")
-            lines.append(f"   💰 总资产：{format_num(total)} 星声")
-            lines.append(f"   💵 {format_num(cash)} | 🏦 {format_num(bank)} | 📈 {format_num(stock)}")
-            if i < 9:
-                lines.append("")
-        
-        # 找到自己的排名
-        my_rank = None
-        for idx, (uid, _) in enumerate(sorted_assets, 1):
-            if uid == user_id:
-                my_rank = idx
-                break
-        
-        if my_rank:
-            my_total, my_cash, my_bank, my_stock = await self._get_user_asset(user_id)
-            lines.extend([
-                "═══════════════════",
-                f"💡 我的排名：第 {my_rank} 名",
-                f"💰 总资产：{format_num(my_total)} 星声",
-                f"💵 {format_num(my_cash)} | 🏦 {format_num(my_bank)} | 📈 {format_num(my_stock)}"
-            ])
-        
-        # 添加税收信息
-        async with aiosqlite.connect(self.db_path) as db:
-            cursor = await db.execute(
-                "SELECT total_tax, bonus_pool, wealth_gap_ratio FROM tax_pool WHERE date = ?",
-                (today_str(),)
-            )
-            row = await cursor.fetchone()
-            if row:
-                lines.append(f"\n⚖️ 贫富差距r={row[2]:.1f} | 🏛️️ 税:{format_num(row[0])} | 奖池:{format_num(row[1])}")
-        
-        yield event.plain_result("\n".join(lines))
-    
-    @filter.command("经济")
-    async def cmd_economy(self, event: AstrMessageEvent):
-        """宏观经济数据"""
-        await self._ensure_db()
-        
-        # 记录经济数据
-        all_assets = await self._get_all_assets()
-        total_assets = sum(w for _, w in all_assets)
-        user_count = len(all_assets)
-        avg_assets = total_assets // user_count if user_count > 0 else 0
-        
-        # 计算基尼系数
-        wealth_list = [w for _, w in all_assets if w >= 0]
-        if len(wealth_list) >= 2:
-            wealth_list.sort()
-            n = len(wealth_list)
-            total_wealth = sum(wealth_list)
-            if total_wealth > 0:
-                cumsum = sum((i + 1) * w for i, w in enumerate(wealth_list))
-                gini = (2.0 * cumsum) / (n * total_wealth) - (n + 1.0) / n
-                gini = max(0.0, min(1.0, gini))
-            else:
-                gini = 0.0
-        else:
-            gini = 0.0
-        
-        # 保存数据
-        async with aiosqlite.connect(self.db_path) as db:
-            # 确保经济历史表有赛季字段
-            await db.execute("""
-                CREATE TABLE IF NOT EXISTS economy_history (
-                    date TEXT PRIMARY KEY,
-                    season INTEGER,
-                    total_assets INTEGER,
-                    user_count INTEGER,
-                    avg_assets INTEGER,
-                    gini_coefficient REAL,
-                    wealth_gap_ratio REAL
-                )
-            """)
-            
-            # 尝试添加赛季列（如果不存在）
-            try:
-                await db.execute("ALTER TABLE economy_history ADD COLUMN season INTEGER DEFAULT 1")
-            except Exception as e:
-                logger.debug(f"获取昵称失败: {e}")
-            
-            await db.execute(
-                """INSERT OR REPLACE INTO economy_history 
-                    (date, season, total_assets, user_count, avg_assets, gini_coefficient)
-                    VALUES (?, ?, ?, ?, ?, ?)""",
-                (today_str(), CONFIG.CURRENT_SEASON, total_assets, user_count, avg_assets, gini)
-            )
-            await db.commit()
-            
-            # 获取历史数据
-            cursor = await db.execute(
-                """SELECT date, total_assets, user_count, avg_assets, wealth_gap_ratio
-                   FROM economy_history ORDER BY date DESC LIMIT 7"""
-            )
-            history = await cursor.fetchall()
-        
-        if not history:
-            yield event.plain_result("🎁 暂无经济数据")
-            return
-        
-        latest = history[0]
-        lines = [
-            f"📊 索拉里斯宏观经济报告（S{CONFIG.CURRENT_SEASON}赛季）",
-            "═══════════════════",
-            f"💰 总资产：{format_num(int(latest[1]))} 星声",
-            f"👥 玩家数：{int(latest[2])} 人",
-            f"💵 人均资产：{format_num(int(latest[3]))} 星声",
-            f"📉 基尼系数：{gini:.3f}",
-            "",
-            "💰 近7天详细数据：",
-            "日期　　| 总资产　　　　| 玩家数 | 人均",
-            "────────┼───────────────┼────────┼──────────"
-        ]
-        
-        for row in history[:7]:
-            date_short = row[0][-5:] if len(row[0]) >= 5 else row[0]
-            lines.append(f"{date_short}　│ {format_num(int(row[1])):>13} │ {int(row[2]):>6} │ {format_num(int(row[3])):>9}")
-        
-        yield event.plain_result("\n".join(lines))
-    
-    @filter.command("税收")
-    async def cmd_tax(self, event: AstrMessageEvent):
-        """税收报告"""
-        await self._ensure_db()
-        
-        today = today_str()
-        
-        async with aiosqlite.connect(self.db_path) as db:
-            cursor = await db.execute(
-                """SELECT total_tax, bonus_pool, claimed, top10_list, 
-                          wealth_gap_ratio, extra_tax_rate
-                   FROM tax_pool WHERE date = ?""",
-                (today,)
-            )
-            row = await cursor.fetchone()
-        
-        if not row:
-            yield event.plain_result("📧 今日尚未收税")
-            return
-        
-        total, bonus, claimed, top10, gap_ratio, extra_rate = row
-        remaining = bonus - claimed
-        
-        msg = (
-            f"🏛️️ 富豪税与贫富差距报告\n"
+            f"🎉 新赛季开启成功！\n"
             f"═══════════════════\n"
-            f"💰 总收税：{format_num(total)}星声\n"
-            f"🎁 今日奖池：{format_num(bonus)}星声\n"
-            f"⛔ 已领取：{format_num(claimed)}星声\n"
-            f"🎒 剩余：{format_num(remaining)}星声\n"
+            f"📅 当前赛季：第 {new_season} 赛季\n"
+            f"✅ 所有用户数据已重置"
         )
-        
-        if gap_ratio and gap_ratio > 1:
-            msg += f"⚖️ 贫富差距指数 r={gap_ratio:.2f}\n"
-            msg += f"📊 调节税率：+{extra_rate*100:.1f}%\n"
-        
-        # 显示税率信息
-        msg += f"\n🏛️️ 税率设置：\n"
-        for i, rate in enumerate(CONFIG.TAX_RATES, 1):
-            msg += f"第{i}名：{rate*100:.1f}%\n"
-        msg += f"贫富差距除数：{CONFIG.WEALTH_GAP_DIVISOR}\n"
-        
-        msg += f"\n═══════════════════\n被税名单：{top10 or '无'}"
-        
-        yield event.plain_result(msg)
-    
-    @filter.command("昨日税收")
-    async def cmd_yesterday_tax(self, event: AstrMessageEvent):
-        """查看昨日税收报告"""
-        await self._ensure_db()
-        
-        yesterday = (get_beijing_time() - timedelta(days=1)).strftime("%Y-%m-%d")
-        
-        async with aiosqlite.connect(self.db_path) as db:
-            cursor = await db.execute(
-                """SELECT total_tax, bonus_pool, claimed, top10_list, 
-                          wealth_gap_ratio, extra_tax_rate
-                   FROM tax_pool WHERE date = ?""",
-                (yesterday,)
-            )
-            row = await cursor.fetchone()
-        
-        if not row:
-            yield event.plain_result("📧 昨日无税收记录")
-            return
-        
-        total, bonus, claimed, top10, gap_ratio, extra_rate = row
-        remaining = bonus - claimed
-        
-        msg = (
-            f"🏛️️ 昨日富豪税报告 ({yesterday})\n"
-            f"═══════════════════\n"
-            f"💰 总收税：{format_num(total)}星声\n"
-            f"🎁 奖池总额：{format_num(bonus)}星声\n"
-            f"✅ 已领取：{format_num(claimed)}星声\n"
-            f"🎒 剩余：{format_num(remaining)}星声\n"
-        )
-        
-        if gap_ratio and gap_ratio > 1:
-            msg += f"⚖️ 贫富差距指数 r={gap_ratio:.2f}\n"
-            msg += f"📊 调节税率：+{extra_rate*100:.1f}%\n"
-        
-        msg += f"\n═══════════════════\n被税名单：{top10 or '无'}"
-        
-        yield event.plain_result(msg)
-    
-    @filter.command("收税")
-    async def cmd_collect_tax(self, event: AstrMessageEvent):
-        """管理员指令：强制立即收税"""
-        await self._ensure_db()
-        
-        user_id = str(event.get_sender_id())
-        
-        # 检查是否为管理员
-        if user_id not in CONFIG.ADMIN_IDS:
-            yield event.plain_result("⛔ 无权使用此命令")
-            return
-        
-        # 强制收税（删除今日记录后重新收）
-        result = await self._force_collect_tax()
-        
-        if result:
-            total_tax, bonus_pool, top10_list, wealth_gap_ratio, extra_rate = result
-            msg = (
-                f"🏛️️ 强制收税完成\n"
-                f"═══════════════════\n"
-                f"💰 总收税：{format_num(total_tax)} 星声\n"
-                f"🎁 奖池：{format_num(bonus_pool)} 星声\n"
-            )
-            if wealth_gap_ratio and wealth_gap_ratio > 1:
-                msg += f"⚖️ 贫富差距指数：r={wealth_gap_ratio:.2f}\n"
-                msg += f"📊 调节税率：+{extra_rate*100:.1f}%\n"
-            msg += f"\n被税名单：{top10_list or '无'}"
-            yield event.plain_result(msg)
-        else:
-            yield event.plain_result("📧 今日无可收税对象")
-    
-    # ============== 好感度系统 ==============
-    @filter.command("好感度")
-    async def cmd_favor(self, event: AstrMessageEvent):
-        """查看好感度"""
-        await self._ensure_db()
-        
-        user_id = str(event.get_sender_id())
-        nickname = self._get_sender_name(event)
-        
-        # 确保 favor_system 已初始化
-        if not self.favor_system:
-            yield event.plain_result("? 系统初始化中，请稍后再试")
-            return
-        
-        favor_info = await self.favor_system.get_user_favor_info(user_id)
-        if not favor_info:
-            yield event.plain_result("? 获取好感度信息失败")
-            return
-        
-        # 获取关系描述和CD信息
-        rel_info = await self.favor_system.get_relationship_desc(user_id)
-        if not rel_info:
-            rel_info = {'desc': None, 'can_update': True, 'next_update_time': None}
-        
-        # 构建显示消息
-        lines = [
-            f"💖 {nickname} 的好感度信息",
-            f"💕 好感度：{favor_info['favor_level']:.2f}/520"
-        ]
-        
-        # 显示AI生成的关系描述
-        if rel_info.get('desc'):
-            lines.append(f"💭 我们的关系：{rel_info['desc']}")
-            if rel_info.get('can_update'):
-                lines.append("🔄 关系描述可更新")
-            else:
-                # 计算剩余时间
-                try:
-                    next_update = datetime.strptime(rel_info['next_update_time'], "%Y-%m-%d %H:%M:%S")
-                    next_update = next_update.replace(tzinfo=timezone(timedelta(hours=8)))
-                    remaining = next_update - get_beijing_time()
-                    remaining_minutes = int(remaining.total_seconds() / 60)
-                    lines.append(f"⏳ 关系更新CD：{remaining_minutes}分钟后可更新")
-                except Exception as e:
-                    pass  # 修复：原变量l未定义：添加具体异常类型ines.append("⏳ 关系更新CD中")
-        else:
-            lines.append("💭 我们的关系：还没有足够的互动记录...")
-        
-        lines.append("\n💡 提示：与我互动可以增加好感度哦～")
-        
-        yield event.plain_result("\n".join(lines))
-    
-    @filter.command("好感度排行")
-    async def cmd_favor_ranking(self, event: AstrMessageEvent):
-        """查看好感度排行榜"""
-        await self._ensure_db()
-        
-        # 确保 favor_system 已初始化
-        if not self.favor_system:
-            yield event.plain_result("? 系统初始化中，请稍后再试")
-            return
-        
-        ranking = await self.favor_system.get_favor_ranking()
-        
-        if not ranking:
-            yield event.plain_result("🎁 暂无好感度数据")
-            return
-        
-        lines = ["💖 好感度排行榜 Top 10", "═══════════════════"]
-        medals = ["🥇", "🥈", "🥉", "4️⃣", "5️⃣", "6️⃣", "7️⃣", "8️⃣", "9️⃣", "🔟"]
-        
-        # 获取所有用户的关系描述
-        async with aiosqlite.connect(self.db_path) as db:
-            cursor = await db.execute("SELECT user_id, relationship_desc FROM user_relationship")
-            relationship_map = {row[0]: row[1] for row in await cursor.fetchall()}
-        
-        for i, user_info in enumerate(ranking[:10], 1):
-            medal = medals[i-1] if i-1 < len(medals) else f"{i}."
-            name = await self._get_nickname(user_info['user_id']) or mask_id(user_info['user_id'])
-            ai_rel = relationship_map.get(user_info['user_id'])
-            
-            lines.append(f"{medal} {name}")
-            lines.append(f"   💕 好感度：{user_info.get('favor_level', 0)}")
-            if ai_rel:
-                lines.append(f"   🎁 {ai_rel}")
-            if i < 10:
-                lines.append("")
-        
-        # 找到自己的排名
-        user_id = str(event.get_sender_id())
-        my_rank = None
-        my_info = None
-        for idx, user_info in enumerate(ranking, 1):
-            if user_info.get('user_id') == user_id:
-                my_rank = idx
-                my_info = user_info
-                break
-        
-        if my_rank and my_info:
-            # 获取自己的关系描述
-            my_rel_info = await self.favor_system.get_relationship_desc(user_id)
-            if not my_rel_info:
-                my_rel_info = {'desc': None}
-            
-            if my_rel_info.get('desc'):
-                my_ai_rel = my_rel_info['desc']
-            else:
-                my_ai_rel = "还没有足够的互动记录..."
-            
-            lines.extend([
-                "═══════════════════",
-                f"💡 我的排名：第 {my_rank} 名",
-                f"💕 我的好感度：{my_info.get('favor_level', 0)}",
-                f"💭 我们的关系：{my_ai_rel}"
-            ])
-        
-        yield event.plain_result("\n".join(lines))
-    
-    @filter.command("成就")
-    async def cmd_achievements(self, event: AstrMessageEvent):
-        """查看个人成就"""
-        await self._ensure_db()
-        
-        user_id = str(event.get_sender_id())
-        nickname = self._get_sender_name(event)
-        
-        achievements = await self.achievement_service.get_user_achievements(user_id)
-        obtained = achievements.get("obtained", {})
-        obtained_count = achievements.get("obtained_count", 0)
-        total_count = achievements.get("total_count", 0)
-        
-        lines = [f"🎁 {nickname} 的成就", "═══════════════════"]
-        
-        if obtained:
-            # 按稀有度排序
-            rarity_order = {"colorful": 0, "gold": 1, "purple": 2, "blue": 3}
-            sorted_achievements = []
-            
-            for aid, obtain_time in obtained.items():
-                if aid in ACHIEVEMENTS:
-                    achievement = ACHIEVEMENTS[aid]
-                    # 使用元组 (稀有度顺序, 成就名称) 作为排序键，避免比较字典
-                    sort_key = (rarity_order.get(achievement.get("rarity", "blue"), 3), achievement.get("name", ""))
-                    sorted_achievements.append((sort_key, achievement, obtain_time))
-            
-            sorted_achievements.sort(key=lambda x: x[0])
-            
-            for _, achievement, obtain_time in sorted_achievements:
-                lines.append(f"{achievement['emoji']} {achievement['name']}")
-                lines.append(f"   📝 {achievement['desc']}")
-                # 显示成就加成
-                rarity = achievement.get("rarity", "blue")
-                try:
-                    bonus_config = CONFIG.ACHIEVEMENT_BONUSES.get(rarity, {})
-                    bonus_desc = bonus_config.get("desc", "无加成")
-                except Exception as e:
-                      # 修复：添加具体异常类型# 如果CONFIG没有ACHIEVEMENT_BONUSES，使用默认值
-                    bonus_desc = {
-                        "blue": "每日签到额外增加1个星声",
-                        "purple": "银行存款利率永久性提升0.1%",
-                        "gold": "创立公司时额外赠送1000股",
-                        "colorful": "每日签到额外获得1点好感值"
-                    }.get(rarity, "无加成")
-                lines.append(f"   ? 加成：{bonus_desc}")
-                lines.append(f"   🎁 {obtain_time}")
-                lines.append("")
-        else:
-            lines.append("🎁 暂未获得任何成就")
-        
-        lines.extend([
-            "═══════════════════",
-            f"🎁 已获得：{obtained_count}/{total_count}",
-            "🎁 完成各种任务可以获得成就，成就永久保存"
-        ])
-        
-        yield event.plain_result("\n".join(lines))
-    
-    @filter.command("所有人成就")
-    async def cmd_all_achievements(self, event: AstrMessageEvent):
-        """管理员查看所有用户的成就"""
-        await self._ensure_db()
-        
-        user_id = str(event.get_sender_id())
-        
-        # 检查是否为管理员
-        if user_id not in CONFIG.ADMIN_IDS:
-            yield event.plain_result("? 权限不足！此命令仅管理员可用")
-            return
-        
-        # 获取所有用户的成就
-        all_achievements = await self.achievement_service.get_all_achievements()
-        
-        if not all_achievements:
-            yield event.plain_result("📧 暂无成就数据")
-            return
-        
-        lines = ["🎁 所有人成就统计", "═══════════════════"]
-        
-        # 统计每个用户的成就
-        for uid, achievements in all_achievements.items():
-            name = await self._get_nickname(uid) or mask_id(uid)
-            lines.append(f"\n🎒 {name}")
-            lines.append(f"   成就数量：{len(achievements)}")
-            
-            if achievements:
-                # 按稀有度分类
-                rarity_emojis = {"blue": "🎁", "purple": "🎁", "gold": "🎁", "colorful": "🎁"}
-                rarity_counts = {"blue": 0, "purple": 0, "gold": 0, "colorful": 0}
-                
-                for aid in achievements:
-                    if aid in ACHIEVEMENTS:
-                        rarity = ACHIEVEMENTS[aid].get("rarity", "blue")
-                        rarity_counts[rarity] += 1
-                
-                rarity_str = " | ".join([f"{rarity_emojis[r]} {count}" for r, count in rarity_counts.items() if count > 0])
-                lines.append(f"   {rarity_str}")
-        
-        # 统计总成就数
-        total_achievements = sum(len(achievements) for achievements in all_achievements.values())
-        lines.extend([
-            "",
-            "═══════════════════",
-            f"📊 总计：{len(all_achievements)} 个用户，{total_achievements} 个成就"
-        ])
-        
-        yield event.plain_result("\n".join(lines))
-    
-    @filter.command("授予成就")
-    async def cmd_grant_achievement(self, event: AstrMessageEvent):
-        """管理员授予用户特定成就"""
-        await self._ensure_db()
-        
-        user_id = str(event.get_sender_id())
-        
-        # 检查是否为管理员
-        if user_id not in CONFIG.ADMIN_IDS:
-            yield event.plain_result("? 权限不足！此命令仅管理员可用")
-            return
-        
-        # 解析参数: /授予成就 <用户ID/所有人> <成就ID>
-        parts = event.message_str.split()
-        if len(parts) < 3:
-            yield event.plain_result("? 用法：/授予成就 <用户ID/所有人> <成就ID>")
-            return
-        
-        target = parts[1]
-        achievement_id = parts[2]
-        
-        # 检查成就是否存在
-        if achievement_id not in ACHIEVEMENTS:
-            yield event.plain_result(f"? 成就 {achievement_id} 不存在！")
-            return
-        
-        achievement = ACHIEVEMENTS[achievement_id]
-        
-        if target == "所有人":
-            # 给所有用户授予成就
-            count = await self.achievement_service.grant_achievement_to_all(achievement_id)
-            yield event.plain_result(
-                f"⛔ 成功给 {count} 个用户授予成就！\n"
-                f"🎁 {achievement['emoji']} {achievement['name']}\n"
-                f"📝 {achievement['desc']}"
-            )
-        else:
-            # 给特定用户授予成就
-            success = await self.achievement_service.grant_achievement(target, achievement_id)
-            
-            if success:
-                yield event.plain_result(
-                    f"⛔ 成功给用户 {target} 授予成就！\n"
-                    f"🎁 {achievement['emoji']} {achievement['name']}\n"
-                    f"📝 {achievement['desc']}"
-                )
-            else:
-                yield event.plain_result(f"🎁 用户 {target} 已经拥有该成就。")
-    
-    @filter.command("重置签到")
-    async def cmd_reset_signin(self, event: AstrMessageEvent):
-        """管理员重置用户签到状态（保留连续天数，允许重新签到和抽塔罗牌）"""
-        await self._ensure_db()
-        
-        user_id = str(event.get_sender_id())
-        
-        # 检查是否为管理员
-        if user_id not in CONFIG.ADMIN_IDS:
-            yield event.plain_result("? 权限不足！此命令仅管理员可用")
-            return
-        
-        # 解析参数: /重置签到 <用户ID/所有人>
-        parts = event.message_str.split()
-        if len(parts) < 2:
-            yield event.plain_result("? 用法：/重置签到 <用户ID/所有人>")
-            return
-        
-        target = parts[1]
-        today = today_str()
-        
-        if target == "所有人":
-            # 重置所有人的今日签到状态
-            async with aiosqlite.connect(self.db_path) as db:
-                # 将所有今日签到的用户的last_signin_date设为昨天，允许重新签到
-                yesterday = (get_beijing_time() - timedelta(days=1)).strftime("%Y-%m-%d")
-                cursor = await db.execute(
-                    "UPDATE users SET last_signin_date = ? WHERE last_signin_date = ?",
-                    (yesterday, today)
-                )
-                signin_count = cursor.rowcount
-                
-                # 删除今日所有塔罗牌记录
-                cursor = await db.execute(
-                    "DELETE FROM user_daily_tarot WHERE date = ?",
-                    (today,)
-                )
-                tarot_count = cursor.rowcount
-                
-                await db.commit()
-            
-            yield event.plain_result(
-                f"⛔ 已重置所有人的今日签到状态！\n"
-                f"🎁 重置签到记录：{signin_count} 人\n"
-                f"🎁 重置塔罗牌记录：{tarot_count} 人\n"
-                f"📅 连续签到天数保持不变\n"
-                f"🎁 所有人可以重新签到并抽取塔罗牌"
-            )
-        else:
-            # 重置特定用户的今日签到状态
-            target_user = target
-            async with aiosqlite.connect(self.db_path) as db:
-                # 将用户的last_signin_date设为昨天，允许重新签到
-                yesterday = (get_beijing_time() - timedelta(days=1)).strftime("%Y-%m-%d")
-                await db.execute(
-                    "UPDATE users SET last_signin_date = ? WHERE user_id = ? AND last_signin_date = ?",
-                    (yesterday, target_user, today)
-                )
-                
-                # 删除今日塔罗牌记录
-                await db.execute(
-                    "DELETE FROM user_daily_tarot WHERE user_id = ? AND date = ?",
-                    (target_user, today)
-                )
-                
-                await db.commit()
-            
-            yield event.plain_result(
-                f"⛔ 已重置用户 {target_user} 的今日签到状态！\n"
-                f"📅 连续签到天数保持不变\n"
-                f"🎁 用户可以重新签到并抽取塔罗牌"
-            )
-    
-    @filter.command("塔罗牌")
-    async def cmd_view_tarot(self, event: AstrMessageEvent):
-        """查看今天获得的塔罗牌"""
-        await self._ensure_db()
-        
-        user_id = str(event.get_sender_id())
-        today = today_str()
-        
-        async with aiosqlite.connect(self.db_path) as db:
-            # 查询今日塔罗牌
-            cursor = await db.execute(
-                "SELECT tarot_card, draw_time FROM user_daily_tarot WHERE user_id = ? AND date = ?",
-                (user_id, today)
-            )
-            row = await cursor.fetchone()
-        
-        if not row:
-            yield event.plain_result(
-                "🎁 你今天还没有抽取塔罗牌！\n"
-                "🎁 请先签到或抽取塔罗牌"
-            )
-            return
-        
-        card, draw_time = row
-        desc = CONFIG.TAROT_DESC.get(card, "今日运势平稳")
-        effect = CONFIG.TAROT_EFFECTS.get(card, {})
-        effect_desc = effect.get("desc", "无特殊效果")
-        
-        yield event.plain_result(
-            f"🔮 今日塔罗牌：【{card}】\n"
-            f"═══════════════════\n"
-            f"🎁 {desc}\n"
-            f"🎁 效果：{effect_desc}\n"
-            f"🎁 抽取时间：{draw_time}"
-        )
-    
-    # ============== 消息事件处理 ==============
-    async def on_message(self, event: AstrMessageEvent):
-        """处理消息事件
-        
-        注意：情感分析现在完全由LLM通过prompt自主决定
-        不再使用硬编码的关键词匹配
-        """
-        await self._ensure_db()
-        
-        # 情感分析和奖惩现在完全由AI通过prompt自主决定
-        # 无需在此处进行任何处理
-        pass
-    
-    async def _get_user_async(self, user_id: str) -> dict:
-        """异步获取用户信息"""
-        async with aiosqlite.connect(self.db_path) as db:
-            cursor = await db.execute(
-                "SELECT * FROM users WHERE user_id = ?", (user_id,)
-            )
-            row = await cursor.fetchone()
-            
-            if row:
-                try:
-                    balance = int(row[1]) if len(row) > 1 and row[1] else 0
-                except (ValueError, TypeError):
-                    balance = 0
-                try:
-                    bank_balance = int(row[2]) if len(row) > 2 and row[2] else 0
-                except (ValueError, TypeError):
-                    bank_balance = 0
-                try:
-                    last_signin_date = row[3] if len(row) > 3 else None
-                except Exception as e:
-                    pass  # 修复：原变量l未定义：添加具体异常类型ast_signin_date = None
-                try:
-                    consecutive = int(row[4]) if len(row) > 4 and row[4] else 0
-                except (ValueError, TypeError):
-                    consecutive = 0
-                try:
-                    favor_value = int(row[6]) if len(row) > 6 and row[6] else 0
-                except (ValueError, TypeError):
-                    favor_value = 0
-                return {
-                    "user_id": row[0],
-                    "balance": balance,
-                    "bank_balance": bank_balance,
-                    "last_signin_date": last_signin_date,
-                    "consecutive_days": consecutive,
-                    "favor_value": favor_value
-                }
-            else:
-                return {
-                    "user_id": user_id,
-                    "balance": 0,
-                    "bank_balance": 0,
-                    "last_signin_date": None,
-                    "consecutive_days": 0,
-                    "favor_value": 0
-                }
-    
-    # ============== LLM 干涉功能 ==============
-    @filter.on_llm_request()
-    async def intercept_llm_request(self, event: AstrMessageEvent, req: ProviderRequest):
-        """拦截LLM请求，注入好感度信息"""
-        await self._ensure_db()
-        
-        user_id = str(event.get_sender_id())
-        
-        # 使用FavorSystem获取好感度信息
-        favor_info = await self.favor_system.get_llm_favor_info(user_id)
-        
-        # 尝试注入到system_prompt（优先）
-        if hasattr(req, 'system_prompt') and req.system_prompt is not None:
-            req.system_prompt += favor_info
-        elif hasattr(req, 'prompt') and req.prompt is not None:
-            # 如果没有system_prompt，则注入到prompt开头
-            req.prompt = favor_info + "\n" + req.prompt
-        
-        return
-    
-    @filter.on_llm_response(priority=200)
-    async def on_llm_response(self, event: AstrMessageEvent, resp: LLMResponse) -> None:
-        """处理LLM响应，检查是否包含奖惩指令（带安全校验）"""
-        logger.info("[on_llm_response] 方法被调用!")
-        try:
-            await self._ensure_db()
 
-            user_id = str(event.get_sender_id())
-
-            # 安全检查：只允许特定用户触发经济操作（防止提示注入攻击）
-            # 获取用户今日消息数，新用户或消息数异常的不执行经济操作
-            async with aiosqlite.connect(self.db_path) as db:
-                cursor = await db.execute(
-                    "SELECT COUNT(*) FROM user_daily_tarot WHERE user_id = ? AND date = ?",
-                    (user_id, today_str())
-                )
-                row = await cursor.fetchone()
-                interaction_count = row[0] if row else 0
-
-                # 如果用户今日没有正常交互记录，可能是攻击，跳过经济操作
-                if interaction_count == 0:
-                    logger.warning(f"[on_llm_response] 用户 {user_id} 今日无正常交互记录，跳过经济操作（安全检查）")
-                    return
-            
-            # 获取AI的回复内容
-            response_text = ""
-            if hasattr(resp, 'completion_text') and resp.completion_text:
-                response_text = resp.completion_text
-            elif hasattr(resp, 'text') and resp.text:
-                response_text = resp.text
-            elif hasattr(resp, 'content') and resp.content:
-                response_text = resp.content
-            
-            logger.info(f"[on_llm_response] 收到AI回复，用户 {user_id}，内容长度 {len(response_text)}")
-            
-            if not response_text:
-                logger.info("[on_llm_response] 回复内容为空，跳过处理")
-                return
-            
-            # 检查是否包含扣除星声指令 [扣除星声:数量]
-            penalty_match = re.search(r'\[扣除星声:(\d+)\]', response_text)
-            logger.info(f"[on_llm_response] 扣除星声匹配结果: {penalty_match is not None}")
-            if penalty_match:
-                penalty_amount = int(penalty_match.group(1))
-                logger.info(f"[on_llm_response] 提取到扣除金额: {penalty_amount}")
-                # 获取用户资产
-                user_assets = await self.favor_system.get_user_assets(user_id)
-                user_total = user_assets['total']
-                max_penalty = int(user_total * 0.05)  # 5%资产
-                logger.info(f"[on_llm_response] 用户总资产: {user_total}, 扣除上限: {max_penalty}")
-                
-                # 限制扣除金额
-                actual_penalty = min(penalty_amount, max_penalty)
-                logger.info(f"[on_llm_response] 实际扣除金额: {actual_penalty}")
-                
-                if actual_penalty > 0:
-                    # 执行扣除
-                    async with aiosqlite.connect(self.db_path) as db:
-                        await db.execute(
-                            "UPDATE users SET balance = balance - ? WHERE user_id = ?",
-                            (actual_penalty, user_id)
-                        )
-                        await db.commit()
-                    
-                    logger.info(f"[好感度系统] AI扣除用户 {user_id} {actual_penalty} 星声")
-                else:
-                    logger.info(f"[on_llm_response] 实际扣除金额为0，跳过执行")
-            
-            # 检查是否包含奖励星声指令 [奖励星声:数量]
-            reward_match = re.search(r'\[奖励星声:(\d+)\]', response_text)
-            logger.info(f"[on_llm_response] 奖励星声匹配结果: {reward_match is not None}")
-            if reward_match:
-                reward_amount = int(reward_match.group(1))
-                logger.info(f"[on_llm_response] 提取到奖励金额: {reward_amount}")
-                # 获取经济总量
-                total_economy = await self.favor_system.get_total_economy()
-                max_reward = max(10, int(total_economy * 0.0001))  # max(10, 0.01%经济总量)
-                logger.info(f"[on_llm_response] 经济总量: {total_economy}, 奖励上限: {max_reward}")
-                
-                # 限制奖励金额
-                actual_reward = min(reward_amount, max_reward)
-                logger.info(f"[on_llm_response] 实际奖励金额: {actual_reward}")
-                
-                if actual_reward > 0:
-                    # 执行奖励
-                    async with aiosqlite.connect(self.db_path) as db:
-                        await db.execute(
-                            "UPDATE users SET balance = balance + ? WHERE user_id = ?",
-                            (actual_reward, user_id)
-                        )
-                        await db.commit()
-                    
-                    logger.info(f"[好感度系统] AI奖励用户 {user_id} {actual_reward} 星声")
-                else:
-                    logger.info(f"[on_llm_response] 实际奖励金额为0，跳过执行")
-            
-            # 检查是否包含好感值变化指令 [好感值变化:+数量] 或 [好感值变化:-数量]
-            favor_match = re.search(r'\[好感值变化:([+-]?\d+(?:\.\d+)?)\]', response_text)
-            if favor_match:
-                favor_change = float(favor_match.group(1))
-                # 限制变化范围在-10到+10之间
-                favor_change = max(-10, min(10, favor_change))
-                # 四舍五入到整数
-                favor_change = round(favor_change)
-                
-                if favor_change != 0:
-                    # 执行好感值变化
-                    async with aiosqlite.connect(self.db_path) as db:
-                        await db.execute(
-                            "UPDATE users SET favor_value = COALESCE(favor_value, 0) + ? WHERE user_id = ?",
-                            (favor_change, user_id)
-                        )
-                        await db.commit()
-                    
-                    action = "增加" if favor_change > 0 else "减少"
-                    logger.info(f"[好感度系统] AI{action}用户 {user_id} {abs(favor_change)} 点好感值")
-            
-            # 检查是否包含关系更新指令 [关系:描述]
-            rel_match = re.search(r'\[关系:([^\]]+)\]', response_text)
-            logger.info(f"[on_llm_response] 关系匹配结果: {rel_match is not None}")
-            if rel_match:
-                new_relationship = rel_match.group(1).strip()
-                logger.info(f"[on_llm_response] 提取到关系描述: {new_relationship}")
-                if new_relationship and len(new_relationship) <= 100:
-                    # 更新关系描述（带CD检查）
-                    result = await self.favor_system.update_relationship_desc(user_id, new_relationship)
-                    logger.info(f"[on_llm_response] 更新关系结果: {result}")
-                    if result['success']:
-                        logger.info(f"[好感度系统] AI更新用户 {user_id} 的关系描述: {new_relationship}")
-                    else:
-                        logger.info(f"[好感度系统] AI尝试更新用户 {user_id} 的关系描述失败: {result['message']}")
-        except Exception as e:
-            logger.error(f"[on_llm_response] 处理异常: {e}")
-    
-    # ============== 银行系统 ==============
     @filter.command("银行")
     async def cmd_bank(self, event: AstrMessageEvent):
-        """银行信息"""
+        """银行存取款"""
         await self._ensure_db()
-        
+
         user_id = str(event.get_sender_id())
+        args = event.message_str.split()
+
+        if len(args) >= 2:
+            action = args[1]
+            if action in ["存", "存款"]:
+                # 存款
+                amount = int(args[2]) if len(args) >= 3 else 0
+                if amount <= 0:
+                    yield event.plain_result("❌ 请输入有效金额")
+                    return
+
+                result = await self.bank_service.deposit(user_id, amount)
+                if result["success"]:
+                    yield event.plain_result(
+                        f"✅ 存款成功！\n"
+                        f"💰 存入：{format_num(amount)} 星声\n"
+                        f"🏦 银行存款：{format_num(result['new_bank'])} 星声\n"
+                        f"💳 现金余额：{format_num(result['new_cash'])} 星声\n"
+                        f"📈 利率：{result['rate_pct']}%{' (贵宾卡)' if result['has_vip'] else ''}"
+                    )
+                else:
+                    yield event.plain_result(f"❌ {result['message']}")
+                return
+
+            elif action in ["取", "取款"]:
+                # 取款
+                amount = int(args[2]) if len(args) >= 3 else 0
+                if amount <= 0:
+                    yield event.plain_result("❌ 请输入有效金额")
+                    return
+
+                result = await self.bank_service.withdraw(user_id, amount)
+                if result["success"]:
+                    fee_info = " (免手续费)" if result['is_nuo_member'] else f" (手续费 {format_num(result['fee'])} 星声)"
+                    yield event.plain_result(
+                        f"✅ 取款成功！\n"
+                        f"💰 取出：{format_num(result['amount'])} 星声\n"
+                        f"💵 实际到账：{format_num(result['net_amount'])} 星声{fee_info}\n"
+                        f"🏦 银行存款：{format_num(result['new_bank'])} 星声\n"
+                        f"💳 现金余额：{format_num(result['new_cash'])} 星声"
+                    )
+                else:
+                    yield event.plain_result(f"❌ {result['message']}")
+                return
+
+        # 查询银行信息
         bank_info = await self.bank_service.get_bank_info(user_id)
-        
-        vip_status = "🎁 贵宾卡生效中（利率1.5%，取款免手续费）\n" if bank_info["has_vip"] else ""
-        
-        msg = (
-            f"🏦 我的银行\n"
-            f"{vip_status}"
-            f"🏦 存款：{format_num(bank_info['bank'])}星声（日息{bank_info['rate_pct']}%）\n"
-            f"💵 抽卡资源：{format_num(bank_info['balance'])}星声\n"
-            f"💡 提示：每天首次查询/存取时自动结算利息"
+        rate_info = f"{bank_info['rate_pct']}%"
+        if bank_info['has_vip']:
+            rate_info += " (贵宾卡特权)"
+
+        yield event.plain_result(
+            f"🏦 银行信息\n"
+            f"═══════════════════\n"
+            f"💰 银行存款：{format_num(bank_info['bank'])} 星声\n"
+            f"💳 现金余额：{format_num(bank_info['balance'])} 星声\n"
+            f"📈 日利率：{rate_info}\n"
+            f"\n💡 使用 /存款 [金额] 或 /取款 [金额]"
         )
-        
-        yield event.plain_result(msg)
-    
+
     @filter.command("存款")
     async def cmd_deposit(self, event: AstrMessageEvent):
-        """存款"""
+        """银行存款"""
         await self._ensure_db()
-        
+
         user_id = str(event.get_sender_id())
-        parts = event.message_str.split()
-        
+        args = event.message_str.split()
+
+        if len(args) < 2:
+            yield event.plain_result("❌ 用法：/存款 [金额]\n💡 示例：/存款 1000")
+            return
+
         try:
-            amount = int(parts[-1])
-            if amount <= 0:
-                raise ValueError()
-        except (ValueError, IndexError):
-            yield event.plain_result("❌ 金额必须是正整数！\n💡 用法：/存款 金额")
+            amount = int(args[1])
+        except ValueError:
+            yield event.plain_result("❌ 请输入有效的数字金额")
+            return
+
+        if amount <= 0:
+            yield event.plain_result("❌ 请输入大于0的金额")
             return
 
         result = await self.bank_service.deposit(user_id, amount)
-        if not result["success"]:
-            yield event.plain_result(result["message"])
-            return
-        
-        vip_str = "（贵宾卡生效）" if result["has_vip"] else ""
-        
-        yield event.plain_result(
-            f"⛔ 存款成功！\n"
-            f"🎁 银行存款：{format_num(result['new_bank'])}星声\n"
-            f"🎒 剩余抽卡资源：{format_num(result['new_cash'])}星声\n"
-            f"📈 日息{result['rate_pct']}%{vip_str}"
-        )
-    
+        if result["success"]:
+            yield event.plain_result(
+                f"✅ 存款成功！\n"
+                f"💰 存入：{format_num(amount)} 星声\n"
+                f"🏦 银行存款：{format_num(result['new_bank'])} 星声\n"
+                f"💳 现金余额：{format_num(result['new_cash'])} 星声\n"
+                f"📈 利率：{result['rate_pct']}%{' (贵宾卡)' if result['has_vip'] else ''}"
+            )
+        else:
+            yield event.plain_result(f"❌ {result['message']}")
+
     @filter.command("取款")
     async def cmd_withdraw(self, event: AstrMessageEvent):
-        """取款"""
+        """银行取款"""
         await self._ensure_db()
-        
+
         user_id = str(event.get_sender_id())
-        parts = event.message_str.split()
-        
+        args = event.message_str.split()
+
+        if len(args) < 2:
+            yield event.plain_result("❌ 用法：/取款 [金额]\n💡 示例：/取款 1000")
+            return
+
         try:
-            amount = int(parts[-1])
-            if amount <= 0:
-                raise ValueError()
-        except (ValueError, IndexError):
-            yield event.plain_result("❌ 金额必须是正整数！\n💡 用法：/取款 金额")
+            amount = int(args[1])
+        except ValueError:
+            yield event.plain_result("❌ 请输入有效的数字金额")
+            return
+
+        if amount <= 0:
+            yield event.plain_result("❌ 请输入大于0的金额")
             return
 
         result = await self.bank_service.withdraw(user_id, amount)
-        if not result["success"]:
-            yield event.plain_result(result["message"])
-            return
-        
-        fee_str = "0（贵宾卡免手续费）" if result["has_vip"] else f"{result['fee']}（0.1%）"
-        
-        yield event.plain_result(
-            f"⛔ 取款成功！\n"
-            f"💰 取出：{format_num(result['amount'])}星声\n"
-            f"🎁 手续费：{fee_str}\n"
-            f"💵 到账抽卡资源：{format_num(result['actual'])}星声\n"
-            f"💵 现在抽卡资源：{format_num(result['new_cash'])}星声\n"
-            f"🎒 剩余存款：{format_num(result['new_bank'])}星声"
-        )
-    
-    # ============== 商店系统 ==============
-    @filter.command("商店")
-    async def cmd_shop(self, event: AstrMessageEvent):
-        """商店"""
-        await self._ensure_db()
-        
-        items = await self.shop_service.get_shop_items()
-        lines = ["🛍️ 莫塔里银行商店", "═══════════════════"]
-        
-        for name, info in items.items():
-            limit = f"（每日限购{info['daily_limit']}次）" if info['daily_limit'] > 0 else "（永久有效）"
-            lines.append(f"🎒 {name}")
-            lines.append(f"💰 价格：{format_num(info['price'])}星声{limit}")
-            lines.append(f"📝 {info['desc']}")
-            lines.append("")
-        
-        lines.append(f"⚠️ 注意：每日最多占卜{CONFIG.LOTTERY_LIMIT}次")
-        lines.append("💡 用法：/购买 商品名 数量")
-        
-        yield event.plain_result("\n".join(lines))
-    
-    @filter.command("购买")
-    async def cmd_buy(self, event: AstrMessageEvent):
-        """购买物品"""
+        if result["success"]:
+            fee_info = " (免手续费)" if result['has_vip'] else f" (手续费 {format_num(result['fee'])} 星声)"
+            yield event.plain_result(
+                f"✅ 取款成功！\n"
+                f"💰 取出：{format_num(result['amount'])} 星声\n"
+                f"💵 实际到账：{format_num(result['actual'])} 星声{fee_info}\n"
+                f"🏦 银行存款：{format_num(result['new_bank'])} 星声\n"
+                f"💳 现金余额：{format_num(result['new_cash'])} 星声"
+            )
+        else:
+            yield event.plain_result(f"❌ {result['message']}")
+
+    @filter.command("转账")
+    async def cmd_transfer(self, event: AstrMessageEvent):
+        """银行转账"""
         await self._ensure_db()
         
         user_id = str(event.get_sender_id())
-        parts = event.message_str.split()
+        args = event.message_str.split()
         
-        if len(parts) < 2:
-            yield event.plain_result("? 用法：/购买 商品名 数量")
+        if len(args) < 2:
+            yield event.plain_result("❌ 用法：/转账 @用户/QQ号 [金额]")
             return
         
-        item_name = parts[1]
-        try:
-            count = int(parts[2]) if len(parts) >= 3 else 1
-            if count <= 0:
-                raise ValueError()
-        except Exception as e:
-            pass  # 修复：原变量c未定义：添加具体异常类型ount = 1
+        # 提取目标用户
+        target_user = self._extract_target_user(event)
+        if not target_user:
+            # 尝试从参数中提取
+            if len(args) >= 2 and args[1].isdigit():
+                target_user = args[1]
+            else:
+                yield event.plain_result("❌ 请指定目标用户（@用户或输入QQ号）")
+                return
         
-        result = await self.shop_service.buy_item(user_id, item_name, count)
-        if not result["success"]:
-            yield event.plain_result(result["message"])
+        # 提取金额
+        amount = 0
+        for part in args:
+            if part.isdigit():
+                amount = int(part)
+                break
+        
+        if amount <= 0:
+            yield event.plain_result("❌ 请输入有效金额")
             return
         
-        # 检查成就
-        await self.achievement_service.check_achievements(user_id, "buy", {"item": item_name})
+        result = await self.bank_service.transfer(user_id, target_user, amount)
         
-        yield event.plain_result(
-            f"⛔ 购买成功！\n"
-            f"🎁 {result['item_name']} x{result['count']}\n"
-            f"🎁 花费：{format_num(result['total_price'])}星声\n"
-            f"🎒 剩余星声：{format_num(result['new_balance'])}星声"
-        )
-    
+        if result["success"]:
+            yield event.plain_result(
+                f"✅ 转账成功！\n"
+                f"💰 金额：{format_num(amount)} 星声\n"
+                f"👤 收款人：{mask_id(target_user)}"
+            )
+        else:
+            yield event.plain_result(f"❌ {result['message']}")
+
+    @filter.command("商店")
+    @filter.command("购买")
+    async def cmd_shop(self, event: AstrMessageEvent):
+        """商店购买"""
+        await self._ensure_db()
+
+        user_id = str(event.get_sender_id())
+        args = event.message_str.split(maxsplit=1)
+
+        if len(args) < 2:
+            # 显示商店列表
+            items = await self.shop_service.get_shop_items()
+            lines = ["🛒 商店", "═══════════════════"]
+            for item_id, item in items.items():
+                lines.append(f"{item['emoji']} {item['name']} - {format_num(item['price'])} 星声")
+                lines.append(f"   📝 {item['desc']}")
+            lines.append("\n💡 使用 /购买 [商品名] 购买")
+            yield event.plain_result("\n".join(lines))
+            return
+
+        # 购买商品
+        item_name = args[1].strip()
+        result = await self.shop_service.buy_item(user_id, item_name)
+
+        if result["success"]:
+            # 检查成就
+            new_achievements = await self.achievement_service.check_achievements(
+                user_id, "buy", {"item": item_name}
+            )
+
+            lines = [
+                f"✅ 购买成功！",
+                f"🛒 {result['item_name']}",
+                f"💰 花费：{format_num(result['price'])} 星声",
+                f"💳 余额：{format_num(result['balance'])} 星声"
+            ]
+
+            if new_achievements:
+                lines.append("\n🏆 【新成就】")
+                for a in new_achievements:
+                    lines.append(f"{a['emoji']} {a['name']}")
+
+            yield event.plain_result("\n".join(lines))
+        else:
+            yield event.plain_result(f"❌ {result['message']}")
+
     @filter.command("背包")
-    async def cmd_bag(self, event: AstrMessageEvent):
+    async def cmd_inventory(self, event: AstrMessageEvent):
         """查看背包"""
         await self._ensure_db()
         
         user_id = str(event.get_sender_id())
         inventory = await self.shop_service.get_inventory(user_id)
         
-        # 检查花朵成就
-        if inventory["flower_count"] >= 99:
-            await self.achievement_service.check_achievements(user_id, "flower_check", {"count": inventory["flower_count"]})
+        if not inventory:
+            yield event.plain_result("🎒 背包是空的\n去 /商店 购买物品吧！")
+            return
+        
+        lines = ["🎒 我的背包", "═══════════════════"]
+        for item in inventory:
+            lines.append(f"{item['emoji']} {item['name']} x{item['quantity']}")
+        
+        yield event.plain_result("\n".join(lines))
 
-        if not inventory["items"]:
-            msg = "🎁 背包空空如也\n"
-        else:
-            msg = "🎁 我的背包\n═══════════════════\n"
-            for name, qty in inventory["items"]:
-                msg += f"🎒 {name} x{qty}\n"
-
-        msg += f"\n🎁 今日剩余占卜次数：{inventory['remaining_lottery_count']}/{CONFIG.LOTTERY_LIMIT}次\n"
-        msg += "🎁 使用：/使用 占卜券 金额"
-
-        yield event.plain_result(msg)
-    
-    @filter.command("使用")
-    async def cmd_use(self, event: AstrMessageEvent):
-        """使用物品"""
+    @filter.command("占卜")
+    async def cmd_lottery(self, event: AstrMessageEvent):
+        """占卜抽奖 - /占卜 金额"""
         await self._ensure_db()
 
-        user_id = str(event.get_sender_id())
-        parts = event.message_str.split()
-
-        if len(parts) < 3:
-            yield event.plain_result("? 用法：/使用 物品名称 数量")
-            return
-
-        item_name = parts[1]
-
-        try:
-            quantity = int(parts[2])
-            if quantity <= 0:
-                raise ValueError()
-        except Exception as e:
-            pass  # 修复：原变量y未定义：添加具体异常类型ield event.plain_result("? 请输入有效的数量！")
-            return
-
-        # 获取好感值商品配置
-        favor_items = self.favor_system.get_favor_items()
-
-        # 处理好感值商品
-        if item_name in favor_items:
-            # 检查背包中是否有足够的物品
-            async with aiosqlite.connect(self.db_path) as db:
-                cursor = await db.execute(
-                    "SELECT quantity FROM inventory WHERE user_id = ? AND item_name = ?",
-                    (user_id, item_name)
-                )
-                row = await cursor.fetchone()
-                
-                if not row or row[0] < quantity:
-                    yield event.plain_result(f"? 你没有足够的{item_name}！")
-                    return
-                
-                # 扣除物品
-                await db.execute(
-                    "UPDATE inventory SET quantity = quantity - ? WHERE user_id = ? AND item_name = ?",
-                    (quantity, user_id, item_name)
-                )
-                
-                # 增加好感值
-                favor_increase = favor_items[item_name] * quantity
-                await db.execute(
-                    "UPDATE users SET favor_value = favor_value + ? WHERE user_id = ?",
-                    (favor_increase, user_id)
-                )
-                
-                # 音乐会门票特殊效果：3%概率获得金色成就
-                achievement_msg = ""
-                if item_name == "音乐会门票":
-                    if random.random() < 0.03:  # 3%概率
-                        # 授予金色成就：形同陌路
-                        achievement_id = "golden_stranger"
-                        await self.achievement_service._grant_achievement(db, user_id, achievement_id)
-                        achievement_msg = "\n🎁 恭喜获得金色成就：形同陌路"
-                
-                await db.commit()
-            
-            yield event.plain_result(f"? 使用成功！\n使用了 {quantity} 个{item_name}\n增加了 {favor_increase} 点好感值{achievement_msg}")
-        
-        # 处理占卜券
-        elif item_name == "占卜券":
-            if len(parts) < 3:
-                yield event.plain_result("? 用法：/使用 占卜券 <星声数量>")
-                return
-            try:
-                bet = int(parts[2])
-                if bet <= 0:
-                    raise ValueError()
-            except ValueError:
-                yield event.plain_result("? 请输入有效的星声数量！")
-                return
-
-            # 执行占卜
-            result = await self.shop_service.do_lottery(user_id, bet, is_allin=False)
-            if not result["success"]:
-                yield event.plain_result(result["message"])
-                return
-            
-            # 检查成就
-            await self.achievement_service.check_achievements(user_id, "lottery", {"multiplier": result["multiplier"]})
-
-            # 构建结果消息
-            multiplier_str = f"{result['multiplier']:.1f}x" if isinstance(result['multiplier'], float) else f"{result['multiplier']}x"
-            if result["profit"] >= 0:
-                result_str = f"盈利：+{format_num(result['profit'])}星声 🎁"
-            else:
-                result_str = f"亏损：{format_num(result['profit'])}星声 🎁"
-
-            allin_tag = "🎁 【ALL IN】 " if result["is_allin"] else ""
-
-            msg = (
-                f"{allin_tag}{result['result_emoji']} 占卜结果：{result['result_type']}！\n"
-                f"🎁 倍数：{multiplier_str}\n"
-                f"🎁 投入：{format_num(result['bet'])}星声 → 获得：{format_num(result['final'])}星声\n"
-                f"🎁 {result_str}\n"
-                f"🎁 当前抽卡资源：{format_num(result['new_cash'])}星声\n"
-                f"🎒 剩余占卜券：{result['ticket_count']}张\n"
-                f"🎁 今日占卜：{result['used_count']}/{CONFIG.LOTTERY_LIMIT}次"
-            )
-
-            yield event.plain_result(msg)
-        
-        else:
-            yield event.plain_result(f"? 无法使用该物品！")
-    
-    @filter.command("赠送")
-    async def cmd_gift(self, event: AstrMessageEvent):
-        """快捷购买并直接使用好感值商品"""
-        await self._ensure_db()
-        
         user_id = str(event.get_sender_id())
         parts = event.message_str.split()
         
         if len(parts) < 2:
-            yield event.plain_result("? 用法：/赠送 商品名 [数量]")
+            yield event.plain_result("🔮 用法：/占卜 金额\n💡 投入星声进行占卜抽奖\n🔥 全押请用 /Allin")
             return
         
-        item_name = parts[1]
         try:
-            quantity = int(parts[2]) if len(parts) >= 3 else 1
-            if quantity <= 0:
+            bet = int(parts[1])
+            if bet <= 0:
                 raise ValueError()
-        except Exception as e:
-            pass  # 修复：原变量q未定义：添加具体异常类型uantity = 1
-        
-        # 获取好感值商品列表
-        favor_items = self.favor_system.get_favor_items()
-        
-        # 检查是否是好感值商品
-        if item_name not in favor_items:
-            yield event.plain_result(f"? {item_name} 不是好感值商品，无法使用/赠送命令！")
+        except ValueError:
+            yield event.plain_result("❌ 请输入有效的金额！")
             return
-        
-        # 检查商品是否在商店中
-        if item_name not in CONFIG.SHOP_ITEMS:
-            yield event.plain_result(f"? 商店中没有 {item_name}！")
-            return
-        
-        # 获取商品价格
-        item_info = CONFIG.SHOP_ITEMS[item_name]
-        price = item_info["price"]
-        daily_limit = item_info.get("daily_limit", 0)
-        total_price = price * quantity
-        
-        # 检查用户余额
-        user = await self._get_user(user_id)
-        if user["balance"] < total_price:
-            yield event.plain_result(f"? 余额不足！需要 {format_num(total_price)} 星声，当前余额 {format_num(user['balance'])} 星声")
-            return
-        
-        # 检查每日限购
-        if daily_limit > 0:
-            async with aiosqlite.connect(self.db_path) as db:
-                cursor = await db.execute(
-                    "SELECT COALESCE(SUM(count), 0) FROM purchase_log WHERE user_id = ? AND item_name = ? AND purchase_date = ?",
-                    (user_id, item_name, today_str())
-                )
-                row = await cursor.fetchone()
-                purchased_today = row[0] if row else 0
-                
-                if purchased_today + quantity > daily_limit:
-                    remaining = daily_limit - purchased_today
-                    yield event.plain_result(f"? 今日购买次数已达上限！还可购买 {remaining} 个")
-                    return
-        
-        # 扣除星声
-        async with aiosqlite.connect(self.db_path) as db:
-            await db.execute(
-                "UPDATE users SET balance = balance - ? WHERE user_id = ?",
-                (total_price, user_id)
+
+        result = await self.shop_service.do_lottery(user_id, bet)
+
+        if result["success"]:
+            new_achievements = await self.achievement_service.check_achievements(
+                user_id, "lottery", {"multiplier": result['multiplier']}
             )
-            
-            # 记录购买日志
-            await db.execute(
-                "INSERT OR REPLACE INTO purchase_log (user_id, item_name, purchase_date, count) VALUES (?, ?, ?, COALESCE((SELECT count FROM purchase_log WHERE user_id = ? AND item_name = ? AND purchase_date = ?), 0) + ?)",
-                (user_id, item_name, today_str(), user_id, item_name, today_str(), quantity)
-            )
-            
-            # 直接使用：增加好感值
-            favor_increase = favor_items[item_name] * quantity
-            await db.execute(
-                "UPDATE users SET favor_value = favor_value + ? WHERE user_id = ?",
-                (favor_increase, user_id)
-            )
-            
-            # 音乐会门票特殊效果：3%概率获得金色成就
-            achievement_msg = ""
-            if item_name == "音乐会门票":
-                if random.random() < 0.03:  # 3%概率
-                    # 授予金色成就：形同陌路
-                    achievement_id = "golden_stranger"
-                    await self.achievement_service._grant_achievement(db, user_id, achievement_id)
-                    achievement_msg = "\n🎁 恭喜获得金色成就：形同陌路"
-            
-            await db.commit()
-        
-        yield event.plain_result(
-            f"⛔ 赠送成功！\n"
-            f"🎁 购买了 {quantity} 个{item_name}\n"
-            f"🎁 花费：{format_num(total_price)}星声\n"
-            f"🎁 增加了 {favor_increase} 点好感值{achievement_msg}"
-        )
-    
+
+            profit_sign = "+" if result['profit'] >= 0 else ""
+            lines = [
+                f"🔮 占卜结果",
+                f"═══════════════════",
+                f"{result['result_emoji']} {result['result_type']}",
+                f"🎲 倍率：{result['multiplier']:.2f}x",
+                f"💰 投入：{format_num(result['bet'])} 星声",
+                f"💵 获得：{format_num(result['final'])} 星声",
+                f"📊 盈亏：{profit_sign}{format_num(result['profit'])} 星声",
+                f"💳 余额：{format_num(result['new_cash'])} 星声",
+                f"🎫 占卜券剩余：{result['ticket_count']}张",
+                f"🔮 今日剩余次数：{result['remaining_count']}次"
+            ]
+
+            if new_achievements:
+                lines.append("\n🏆 【新成就】")
+                for a in new_achievements:
+                    lines.append(f"{a['emoji']} {a['name']}")
+
+            yield event.plain_result("\n".join(lines))
+        else:
+            yield event.plain_result(f"❌ {result['message']}")
+
     @filter.command("Allin")
     async def cmd_allin(self, event: AstrMessageEvent):
-        """全部身家梭哈占卜"""
+        """Allin - 全部资金抽奖，无占卜券时自动购买"""
         await self._ensure_db()
 
         user_id = str(event.get_sender_id())
 
-        # 获取全部身家
-        user = await self._get_user(user_id)
-        bet = user["balance"]
+        # 获取用户余额
+        async with aiosqlite.connect(self.db_path) as db:
+            cursor = await db.execute(
+                "SELECT balance FROM users WHERE user_id = ?",
+                (user_id,)
+            )
+            row = await cursor.fetchone()
+            if not row:
+                yield event.plain_result("❌ 用户不存在，请先签到！")
+                return
+            balance = int(row[0]) if row[0] else 0
 
-        if bet <= 0:
-            yield event.plain_result("? 你没有星声可以Allin！")
+        if balance <= 0:
+            yield event.plain_result("❌ 你没有星声可以Allin！")
             return
 
-        # 检查是否有占卜券，如果没有则自动购买
+        # 检查占卜券，没有则自动购买
         async with aiosqlite.connect(self.db_path) as db:
             cursor = await db.execute(
                 "SELECT quantity FROM inventory WHERE user_id = ? AND item_name = ?",
                 (user_id, "占卜券")
             )
             row = await cursor.fetchone()
-            
-            ticket_price = 10  # 占卜券价格
-            
-            if not row or int(row[0]) <= 0:
-                # 没有占卜券，尝试自动购买
-                if bet < ticket_price:
-                    yield event.plain_result(f"? 你没有占卜券，且星声不足以购买（需要{ticket_price}星声）！")
-                    return
-                
-                # 扣除星声并添加占卜券
-                await db.execute(
-                    "UPDATE users SET balance = balance - ? WHERE user_id = ?",
-                    (ticket_price, user_id)
-                )
-                await db.execute(
-                    """INSERT INTO inventory (user_id, item_name, quantity) 
-                        VALUES (?, ?, 1)
-                        ON CONFLICT(user_id, item_name) 
-                        DO UPDATE SET quantity = quantity + 1""",
-                    (user_id, "占卜券")
-                )
-                await db.commit()
-                
-                # 更新下注金额（扣除购买占卜券的费用）
-                bet -= ticket_price
-                
-                if bet <= 0:
-                    yield event.plain_result("? 购买占卜券后没有剩余星声可以Allin！")
-                    return
+            ticket_count = int(row[0]) if row and row[0] else 0
 
-        # 执行占卜
-        result = await self.shop_service.do_lottery(user_id, bet, is_allin=True)
-        if not result["success"]:
-            yield event.plain_result(result["message"])
+        auto_bought = False
+        if ticket_count <= 0:
+            # 自动购买占卜券
+            ticket_price = CONFIG.SHOP_ITEMS["占卜券"]["price"]
+            if balance < ticket_price:
+                yield event.plain_result(f"❌ 余额不足！Allin需要至少{format_num(ticket_price)}星声购买占卜券")
+                return
+            
+            buy_result = await self.shop_service.buy_item(user_id, "占卜券", 1)
+            if not buy_result["success"]:
+                yield event.plain_result(f"❌ 自动购买占卜券失败：{buy_result['message']}")
+                return
+            
+            auto_bought = True
+            # 刷新余额
+            balance = buy_result["new_balance"]
+
+        # 检查今日占卜次数
+        lottery_info = await self.shop_service.get_inventory(user_id)
+        if lottery_info["remaining_lottery_count"] <= 0:
+            yield event.plain_result(f"❌ 今日占卜次数已用完！（{lottery_info['used_lottery_count']}/{CONFIG.LOTTERY_LIMIT}次）")
             return
-        
-        # 检查成就
-        await self.achievement_service.check_achievements(user_id, "lottery", {"multiplier": result["multiplier"]})
 
-        # 构建结果消息
-        multiplier_str = f"{result['multiplier']:.1f}x" if isinstance(result['multiplier'], float) else f"{result['multiplier']}x"
-        if result["profit"] >= 0:
-            result_str = f"盈利：+{format_num(result['profit'])}星声 🎁"
+        # Allin：投入全部余额
+        bet = balance
+        result = await self.shop_service.do_lottery(user_id, bet, is_allin=True)
+
+        if result["success"]:
+            new_achievements = await self.achievement_service.check_achievements(
+                user_id, "lottery", {"multiplier": result['multiplier']}
+            )
+
+            profit_sign = "+" if result['profit'] >= 0 else ""
+            lines = [
+                f"� ALL IN！",
+                f"═══════════════════",
+                f"{result['result_emoji']} {result['result_type']}",
+                f"🎲 倍率：{result['multiplier']:.2f}x",
+                f"💰 投入：{format_num(result['bet'])} 星声（全部家当）",
+                f"💵 获得：{format_num(result['final'])} 星声",
+                f"📊 盈亏：{profit_sign}{format_num(result['profit'])} 星声",
+                f"💳 余额：{format_num(result['new_cash'])} 星声",
+                f"🎫 占卜券剩余：{result['ticket_count']}张",
+                f"🔮 今日剩余次数：{result['remaining_count']}次"
+            ]
+
+            if auto_bought:
+                lines.insert(1, f"🎫 自动购买了一张占卜券（{format_num(CONFIG.SHOP_ITEMS['占卜券']['price'])}星声）")
+
+            if new_achievements:
+                lines.append("\n🏆 【新成就】")
+                for a in new_achievements:
+                    lines.append(f"{a['emoji']} {a['name']}")
+
+            if result['profit'] < 0:
+                lines.append("\n💀 倾家荡产...")
+            elif result['multiplier'] >= 5.0:
+                lines.append("\n👑 欧皇降临！！！")
+
+            yield event.plain_result("\n".join(lines))
         else:
-            result_str = f"亏损：{format_num(result['profit'])}星声 🎁"
+            yield event.plain_result(f"❌ {result['message']}")
 
-        allin_tag = "🎁 【ALL IN】 " if result["is_allin"] else ""
-
-        msg = (
-            f"{allin_tag}{result['result_emoji']} 占卜结果：{result['result_type']}！\n"
-            f"🎁 倍数：{multiplier_str}\n"
-            f"🎁 投入：{format_num(result['bet'])}星声 → 获得：{format_num(result['final'])}星声\n"
-            f"🎁 {result_str}\n"
-            f"🎁 当前抽卡资源：{format_num(result['new_cash'])}星声\n"
-            f"🎒 剩余占卜券：{result['ticket_count']}张\n"
-            f"🎁 今日占卜：{result['used_count']}/{CONFIG.LOTTERY_LIMIT}次"
-        )
-
-        yield event.plain_result(msg)
-    
     @filter.command("占卜概率")
     async def cmd_lottery_prob(self, event: AstrMessageEvent):
         """查看占卜概率分布"""
         await self._ensure_db()
 
         user_id = str(event.get_sender_id())
-        prob_info = await self.shop_service.get_lottery_probability(user_id)
+        result = await self.shop_service.get_lottery_probability(user_id)
 
         lines = [
-            "🎁 占卜概率分布",
+            "🔮 占卜概率分布",
             "═══════════════════",
-            f"🎁 今日剩余：{prob_info['remaining']}/{prob_info['limit']} 次",
+            f"� 今日剩余次数：{result['remaining']}/{result['limit']}",
             "",
-            "倍数范围　　　│ 概率　 │ 结果　　　│",
-            "──────────────┼───────┼───────────│"
+            "📊 倍率区间及概率："
         ]
 
-        for range_str, prob, result, emoji in prob_info['prob_dist']:
-            lines.append(f"{range_str:<13}│ {prob:<6} │ {emoji} {result}")
+        for multiplier_range, probability, result_type, emoji in result['prob_dist']:
+            lines.append(f"{emoji} {multiplier_range} : {probability} ({result_type})")
 
         lines.extend([
             "",
-            "💡 提示：",
-            "? 最高可获得 66 倍奖励（1%概率）",
-            "? 获得 5 倍以上可解锁「欧皇」成就",
-            "? 使用：/使用 占卜券 金额",
-            "? Allin：/Allin"
+            "💡 使用 /占卜 进行抽奖"
         ])
 
         yield event.plain_result("\n".join(lines))
-    
-    # ============== 工作系统 ==============
-    @filter.command("找工作")
-    async def cmd_work_list(self, event: AstrMessageEvent):
-        """工作列表"""
+
+    @filter.command("成就")
+    async def cmd_achievements(self, event: AstrMessageEvent):
+        """查看成就"""
         await self._ensure_db()
         
-        works = await self.work_service.get_works()
-        lines = ["🎁 人才市场 - 选择你的职业", "═══════════════════"]
+        user_id = str(event.get_sender_id())
         
-        for name, config in works.items():
-            lines.append(f"{config['emoji']} {name}")
-            lines.append(f"   🎁 入职费：{format_num(config['price'])}星声")
-            lines.append(f"   🎁 时薪：{format_num(config['min'])}~{format_num(config['max'])}星声/小时")
-            lines.append(f"   🎁 {config['desc']}")
-            lines.append("")
+        # 获取所有成就
+        all_achievements = await self.achievement_manager.get_all_achievements()
         
-        lines.append("💡 用法：/应聘 职业名")
+        # 获取用户已获得的成就
+        user_achievements = await self.achievement_service.get_user_achievements(user_id)
+        user_achievement_ids = {a['achievement_id'] for a in user_achievements}
+        
+        lines = ["🏆 我的成就", "═══════════════════"]
+        
+        # 按品质分组显示
+        rarity_order = ["colorful", "gold", "purple", "blue"]
+        rarity_names = {"colorful": "🌈 彩色", "gold": "🌟 金色", "purple": "💜 紫色", "blue": "🔵 蓝色"}
+
+        for rarity in rarity_order:
+            rarity_achievements = [(aid, a) for aid, a in all_achievements.items() if a['rarity'] == rarity]
+            if rarity_achievements:
+                lines.append(f"\n{rarity_names.get(rarity, rarity)}")
+                for achievement_id, achievement in rarity_achievements:
+                    if achievement_id in user_achievement_ids:
+                        lines.append(f"  ✅ {achievement['emoji']} {achievement['name']}")
+                    else:
+                        lines.append(f"  ⬜ {achievement['emoji']} {achievement['name']} (未获得)")
         
         yield event.plain_result("\n".join(lines))
-    
-    @filter.command("应聘")
-    async def cmd_apply_work(self, event: AstrMessageEvent):
-        """应聘工作"""
+
+    @filter.command("所有人成就")
+    async def cmd_all_achievements(self, event: AstrMessageEvent):
+        """管理员查看所有人成就统计"""
         await self._ensure_db()
         
         user_id = str(event.get_sender_id())
-        parts = event.message_str.split()
         
-        if len(parts) < 2:
-            yield event.plain_result("? 用法：/应聘 职业名")
+        # 检查是否为管理员
+        if user_id not in CONFIG.ADMIN_IDS:
+            yield event.plain_result("❌ 权限不足！此命令仅管理员可用")
             return
         
-        work_name = parts[1]
+        # 获取所有用户的成就统计
+        all_stats = await self.achievement_service.get_all_achievements()
         
-        result = await self.work_service.apply_work(user_id, work_name)
-        if not result["success"]:
-            yield event.plain_result(result["message"])
+        if not all_stats:
+            yield event.plain_result("📊 暂无成就数据")
             return
         
-        yield event.plain_result(
-            f"⛔ 成功入职：{result['emoji']}{result['work_name']}！\n"
-            f"🎁 花费：{format_num(result['price'])}星声\n"
-            f"🎁 开始时间：{result['start_time']}"
-        )
-    
-    @filter.command("工作状态")
-    async def cmd_work_status(self, event: AstrMessageEvent):
-        """工作状态"""
+        lines = ["🏆 所有人成就统计", "═══════════════════"]
+        
+        for stat in all_stats[:20]:  # 只显示前20名
+            lines.append(
+                f"{mask_id(stat['user_id'])}: {stat['count']}个成就 "
+                f"(🌈{stat['colorful']} 🌟{stat['gold']} 💜{stat['purple']} 🔵{stat['blue']})"
+            )
+        
+        yield event.plain_result("\n".join(lines))
+
+    @filter.command("授予成就")
+    async def cmd_grant_achievement(self, event: AstrMessageEvent):
+        """管理员授予成就"""
         await self._ensure_db()
         
         user_id = str(event.get_sender_id())
-        result = await self.work_service.get_work_status(user_id)
         
-        if not result["success"]:
-            yield event.plain_result(result["message"])
+        # 检查是否为管理员
+        if user_id not in CONFIG.ADMIN_IDS:
+            yield event.plain_result("❌ 权限不足！此命令仅管理员可用")
             return
         
-        msg = (
-            f"🎁 当前工作：{result['emoji']}{result['work_name']}\n"
-            f"🎁 {result['desc']}\n"
-            f"🎁 已工作：{result['hours_passed']}小时\n"
-            f"🎁 预计可领：约{format_num(result['pending'])}星声\n"
-            f"🎁 累计收入：{format_num(result['total_earned'])}星声\n"
-        )
+        args = event.message_str.split()
+        if len(args) < 3:
+            yield event.plain_result("❌ 用法：/授予成就 @用户/QQ号 成就ID\n使用 \"所有人\" 可授予所有用户")
+            return
         
-        if result["hours_passed"] > 0:
-            msg += f"\n🎁 发送 /领工资 领取{result['hours_passed']}小时工资"
+        # 提取目标用户
+        target_user = self._extract_target_user(event)
+        achievement_id = args[-1]  # 最后一个参数是成就ID
+        
+        if target_user == "所有人":
+            # 授予所有用户
+            result = await self.achievement_service.grant_achievement_to_all(achievement_id)
+            if result["success"]:
+                yield event.plain_result(f"✅ 已成功授予所有用户成就：{result['achievement_name']}")
+            else:
+                yield event.plain_result(f"❌ {result['message']}")
+        elif target_user:
+            # 授予单个用户
+            result = await self.achievement_service.grant_achievement(target_user, achievement_id)
+            if result["success"]:
+                yield event.plain_result(f"✅ 已成功授予 {mask_id(target_user)} 成就：{result['achievement_name']}")
+            else:
+                yield event.plain_result(f"❌ {result['message']}")
         else:
-            msg += f"\n? 还需工作{60 - get_beijing_time().minute}分钟可领工资"
-        
-        yield event.plain_result(msg)
-    
-    @filter.command("领工资")
-    async def cmd_claim_salary(self, event: AstrMessageEvent):
-        """领取工资"""
+            yield event.plain_result("❌ 请指定目标用户（@用户或输入QQ号）")
+
+    @filter.command("成就i")
+    async def cmd_achievements_info(self, event: AstrMessageEvent):
+        """管理员查看所有成就ID"""
         await self._ensure_db()
         
         user_id = str(event.get_sender_id())
-        result = await self.work_service.claim_salary(user_id)
         
-        if not result["success"]:
-            yield event.plain_result(result["message"])
+        # 检查是否为管理员
+        if user_id not in CONFIG.ADMIN_IDS:
+            yield event.plain_result("❌ 权限不足！此命令仅管理员可用")
             return
         
-        lines = [
-            f"🎁 工资到账！",
-            f"🎁 职业：{result['emoji']}{result['work_name']}",
-            f"🎁 工作时间：{result['hours']}小时",
-            f"  基础工资：{format_num(result['total_earnings'])}星声"
-        ]
+        # 获取所有成就
+        all_achievements = await self.achievement_manager.get_all_achievements()
         
-        if result.get('qian_bonus', 0) > 0:
-            lines.append(f"⚡ 千衢结社福利：+{format_num(result['qian_bonus'])}星声")
-            lines.append(f"  总计收入：{format_num(result['final_earnings'])}星声")
+        lines = ["📋 所有成就ID列表", "═══════════════════"]
         
-        lines.append(f"  当前余额：{format_num(result['new_balance'])}星声")
+        # 按品质分组
+        rarity_order = ["colorful", "gold", "purple", "blue"]
+        rarity_names = {"colorful": "🌈 彩色", "gold": "🌟 金色", "purple": "💜 紫色", "blue": "🔵 蓝色"}
+        
+        for rarity in rarity_order:
+            rarity_achievements = [a for a in all_achievements.values() if a['rarity'] == rarity]
+            if rarity_achievements:
+                lines.append(f"\n{rarity_names.get(rarity, rarity)}:")
+                for achievement in rarity_achievements:
+                    lines.append(f"  {achievement['id']} - {achievement['emoji']} {achievement['name']}")
         
         yield event.plain_result("\n".join(lines))
-    
-    # ============== 股票系统 ==============
+
+    @filter.command("创建成就")
+    async def cmd_create_achievement(self, event: AstrMessageEvent):
+        """管理员创建新成就（自动分配ID）"""
+        await self._ensure_db()
+
+        user_id = str(event.get_sender_id())
+
+        # 检查是否为管理员
+        if user_id not in CONFIG.ADMIN_IDS:
+            yield event.plain_result("❌ 权限不足！此命令仅管理员可用")
+            return
+
+        # 解析参数: /创建成就 <成就名> <品质> [emoji] [描述]
+        parts = event.message_str.split(maxsplit=3)
+        if len(parts) < 3:
+            yield event.plain_result(
+                "❌ 用法：/创建成就 <成就名> <品质> [emoji] [描述]\n"
+                "📋 品质可选：blue(蓝色)、purple(紫色)、gold(金色)、colorful(彩色)\n"
+                "💡 示例：/创建成就 我的成就 blue 🏆 这是一个自定义成就"
+            )
+            return
+
+        name = parts[1]
+        rarity = parts[2].lower()
+        
+        # 根据品质自动分配emoji（如果管理员未指定）
+        default_emojis = {
+            "blue": "🏆",
+            "purple": "💜", 
+            "gold": "🌟",
+            "colorful": "🌈"
+        }
+        
+        if len(parts) > 3 and parts[3].strip():
+            # 管理员提供了emoji和描述
+            first_part = parts[3].strip().split()[0]
+            # 检查第一个部分是否是emoji（简单判断：不是普通字符）
+            if len(first_part) <= 2 and not first_part.isalnum():
+                emoji = first_part
+                desc = parts[3][len(emoji):].strip()
+            else:
+                # 第一个部分是描述的一部分
+                emoji = default_emojis.get(rarity, "🏆")
+                desc = parts[3].strip()
+        else:
+            # 管理员没有提供emoji和描述
+            emoji = default_emojis.get(rarity, "🏆")
+            desc = "自定义成就"
+
+        # 验证品质
+        valid_rarities = ["blue", "purple", "gold", "colorful"]
+        if rarity not in valid_rarities:
+            yield event.plain_result(
+                f"❌ 无效的品质：{rarity}\n"
+                f"📋 品质可选：blue(蓝色)、purple(紫色)、gold(金色)、colorful(彩色)"
+            )
+            return
+
+        # 自动生成成就ID
+        # 格式：custom_时间戳_随机数
+        import time
+        achievement_id = f"custom_{int(time.time())}_{random.randint(1000, 9999)}"
+
+        # 添加自定义成就
+        success = await self.achievement_manager.add_custom_achievement(
+            achievement_id, name, desc, emoji, rarity
+        )
+
+        if success:
+            rarity_names = {"colorful": "🌈 彩色", "gold": "🌟 金色", "purple": "💜 紫色", "blue": "💙 蓝色"}
+            yield event.plain_result(
+                f"✅ 成就创建成功！\n"
+                f"═══════════════════\n"
+                f"🆔 自动分配ID：{achievement_id}\n"
+                f"{emoji} 名称：{name}\n"
+                f"📝 描述：{desc}\n"
+                f"{rarity_names.get(rarity, '💙 蓝色')} 品质：{rarity}\n"
+                f"═══════════════════\n"
+                f"💡 使用 /授予成就 @用户/QQ号 {achievement_id} 授予此成就"
+            )
+        else:
+            yield event.plain_result(f"❌ 成就创建失败，请稍后重试")
+
+    @filter.command("重置签到")
+    async def cmd_reset_signin(self, event: AstrMessageEvent):
+        """管理员重置用户签到状态（支持@用户或输入QQ号）"""
+        await self._ensure_db()
+
+        user_id = str(event.get_sender_id())
+
+        # 检查是否为管理员
+        if user_id not in CONFIG.ADMIN_IDS:
+            yield event.plain_result("❌ 权限不足！此命令仅管理员可用")
+            return
+
+        # 提取目标用户
+        target = self._extract_target_user(event)
+        if not target:
+            # 检查是否是"所有人"
+            parts = event.message_str.split()
+            if len(parts) >= 2 and parts[1] == "所有人":
+                target = "所有人"
+            else:
+                yield event.plain_result('❌ 请指定用户（@用户或输入QQ号）或"所有人"')
+                return
+
+        # 使用admin_service重置签到
+        if target == "所有人":
+            result = await self.admin_service.reset_signin(user_id=None)
+            yield event.plain_result(
+                f"✅ 已重置 {result['signin_count']} 个用户的签到状态\n"
+                f"✅ 已清除 {result['tarot_count']} 条今日塔罗牌记录\n"
+                f"💡 这些用户现在可以重新签到和抽塔罗牌"
+            )
+        else:
+            result = await self.admin_service.reset_signin(user_id=target)
+            if result['success']:
+                yield event.plain_result(f"✅ 已重置用户 {mask_id(target)} 的签到状态")
+            else:
+                yield event.plain_result(f"⚠️ {result['message']}")
+
+    # ============== 帮助指令 ==============
+    @filter.command("签到帮助")
+    async def cmd_signin_help(self, event: AstrMessageEvent):
+        """显示签到帮助信息（所有用户）"""
+        yield event.plain_result(get_signin_help())
+
+    @filter.command("高级签到帮助")
+    async def cmd_admin_help(self, event: AstrMessageEvent):
+        """显示管理员帮助信息（仅管理员）"""
+        user_id = str(event.get_sender_id())
+
+        # 检查是否为管理员
+        if user_id not in CONFIG.ADMIN_IDS:
+            yield event.plain_result("❌ 权限不足！此命令仅管理员可用")
+            return
+
+        yield event.plain_result(get_admin_help())
+
+    @filter.command("好感度")
+    async def cmd_favor(self, event: AstrMessageEvent):
+        """查看好感度信息"""
+        await self._ensure_db()
+
+        user_id = str(event.get_sender_id())
+        args = event.message_str.split()
+
+        # 检查是否是查看排行榜
+        if len(args) > 1 and args[1] == "排行":
+            ranking = await self.favor_system.get_favor_ranking()
+
+            if not ranking:
+                yield event.plain_result("📊 暂无好感度数据")
+                return
+
+            lines = ["💕 好感度排行榜", "═══════════════════"]
+
+            medals = ["🥇", "🥈", "🥉", "4️⃣", "5️⃣", "6️⃣", "7️⃣", "8️⃣", "9️⃣", "🔟"]
+
+            for idx, user in enumerate(ranking[:10]):
+                medal = medals[idx] if idx < len(medals) else f"{idx+1}."
+                user_id_rank = user["user_id"]
+                favor_value = user["favor_value"]
+                favor_level = user["favor_level"]
+
+                lines.append(f"{medal} {mask_id(user_id_rank)}")
+                lines.append(f"   💕 好感值：{favor_value}")
+                lines.append(f"   💝 好感度：{favor_level}/520")
+                lines.append("")
+
+            yield event.plain_result("\n".join(lines))
+        else:
+            # 查看个人好感度
+            favor_info = await self.favor_system.get_user_favor_info(user_id)
+            rel_info = await self.favor_system.get_relationship_desc(user_id)
+
+            lines = [
+                f"💕 你与莫宁宁的好感度",
+                "═══════════════════",
+                f"💝 好感度：{favor_info['favor_level']:.2f}/520",
+                f"💕 好感值：{favor_info['favor_value']}",
+            ]
+
+            if rel_info['desc']:
+                lines.append(f"📝 关系描述：{rel_info['desc']}")
+                if rel_info['can_update']:
+                    lines.append("   ✅ 可更新关系描述")
+                else:
+                    lines.append(f"   ⏰ 下次可更新：{rel_info['next_update_time']}")
+
+            lines.extend([
+                "",
+                "💡 使用 /送礼物 [物品名] 给莫宁宁送礼物",
+                "📋 可用礼物：期刊论文、植物奶、神秘糖果、5090、莫宁宁的抱枕、定制蛋糕、手写信、音乐会门票、嘉年华"
+            ])
+
+            yield event.plain_result("\n".join(lines))
+
+    @filter.command("送礼物")
+    @filter.command("赠送")
+    async def cmd_gift(self, event: AstrMessageEvent):
+        """送礼物给莫宁宁"""
+        await self._ensure_db()
+
+        user_id = str(event.get_sender_id())
+        args = event.message_str.split(maxsplit=1)
+
+        if len(args) < 2:
+            items = self.favor_system.get_favor_items()
+            yield event.plain_result(
+                f"❌ 请指定要送的礼物\n"
+                f"📋 用法：/赠送 [物品名]\n"
+                f"🎁 可用礼物：{', '.join(items.keys())}"
+            )
+            return
+
+        item_name = args[1].strip()
+        result = await self.favor_system.gift_item(user_id, item_name)
+
+        yield event.plain_result(result['message'])
+
+    @filter.command("好感度排行")
+    async def cmd_favor_ranking(self, event: AstrMessageEvent):
+        """查看好感度排行榜"""
+        await self._ensure_db()
+
+        ranking = await self.favor_system.get_favor_ranking()
+
+        if not ranking:
+            yield event.plain_result("📊 暂无好感度数据")
+            return
+
+        lines = ["💕 好感度排行榜", "═══════════════════"]
+
+        medals = ["🥇", "🥈", "🥉", "4️⃣", "5️⃣", "6️⃣", "7️⃣", "8️⃣", "9️⃣", "🔟"]
+
+        for idx, user in enumerate(ranking[:10]):
+            medal = medals[idx] if idx < len(medals) else f"{idx+1}."
+            user_id_rank = user["user_id"]
+            favor_value = user["favor_value"]
+            favor_level = user["favor_level"]
+
+            lines.append(f"{medal} {mask_id(user_id_rank)}")
+            lines.append(f"   💕 好感值：{favor_value}")
+            lines.append(f"   💝 好感度：{favor_level}/520")
+            lines.append("")
+
+        yield event.plain_result("\n".join(lines))
+
+    # ============== 公告系统命令 ==============
+
+    @filter.command("公告")
+    async def cmd_announcement(self, event: AstrMessageEvent):
+        """查看公告"""
+        await self._ensure_db()
+
+        user_id = str(event.get_sender_id())
+        args = event.message_str.split()
+
+        # 检查是否是管理员操作
+        if len(args) > 1 and args[1] in ["删除", "置顶", "白名单"]:
+            if user_id not in CONFIG.ADMIN_IDS:
+                yield event.plain_result("❌ 权限不足！此命令仅管理员可用")
+                return
+
+            if args[1] == "删除" and len(args) > 2:
+                try:
+                    ann_id = int(args[2])
+                    success = await self.announcement_service.delete_announcement(ann_id)
+                    if success:
+                        yield event.plain_result(f"✅ 公告 #{ann_id} 已删除")
+                    else:
+                        yield event.plain_result("❌ 删除失败")
+                except ValueError:
+                    yield event.plain_result("❌ 公告ID必须是数字")
+                return
+
+            elif args[1] == "置顶" and len(args) > 2:
+                try:
+                    ann_id = int(args[2])
+                    success = await self.announcement_service.pin_announcement(ann_id)
+                    if success:
+                        yield event.plain_result(f"✅ 公告 #{ann_id} 已置顶")
+                    else:
+                        yield event.plain_result("❌ 置顶失败")
+                except ValueError:
+                    yield event.plain_result("❌ 公告ID必须是数字")
+                return
+
+            elif args[1] == "白名单":
+                if len(args) > 3 and args[2] in ["添加", "add"]:
+                    group_id = args[3]
+                    success = await self.announcement_service.add_whitelist(group_id)
+                    if success:
+                        whitelist = await self.announcement_service.get_whitelist()
+                        yield event.plain_result(f"✅ 群 {group_id} 已添加到白名单\n📋 当前白名单共 {len(whitelist)} 个群")
+                    else:
+                        yield event.plain_result("❌ 添加失败")
+                elif len(args) > 3 and args[2] in ["移除", "remove"]:
+                    group_id = args[3]
+                    success = await self.announcement_service.remove_whitelist(group_id)
+                    if success:
+                        whitelist = await self.announcement_service.get_whitelist()
+                        yield event.plain_result(f"✅ 群 {group_id} 已从白名单移除\n📋 当前白名单共 {len(whitelist)} 个群")
+                    else:
+                        yield event.plain_result("❌ 移除失败")
+                elif len(args) > 2 and args[2] in ["列表", "list"]:
+                    whitelist = await self.announcement_service.get_whitelist()
+                    if whitelist:
+                        lines = ["📋 公告白名单", "═══════════════════"]
+                        for i, group_id in enumerate(whitelist, 1):
+                            lines.append(f"{i}. {group_id}")
+                        yield event.plain_result("\n".join(lines))
+                    else:
+                        yield event.plain_result("📋 白名单为空")
+                else:
+                    yield event.plain_result("❌ 用法：/公告 白名单 添加 [群ID]\n       /公告 白名单 移除 [群ID]\n       /公告 白名单 列表")
+                return
+
+        # 获取所有公告
+        announcements = await self.announcement_service.get_announcements(limit=10)
+
+        if not announcements:
+            yield event.plain_result("📢 暂无公告")
+            return
+
+        lines = ["📢 公告列表", "═══════════════════"]
+
+        for ann in announcements:
+            lines.append(f"#{ann['id']} {ann['title']}")
+            lines.append(f"   📝 {ann['content']}")
+            lines.append(f"   👤 {ann['author_name']} | 📅 {ann['publish_time']}")
+            lines.append("")
+
+        yield event.plain_result("\n".join(lines))
+
+    @filter.command("发布公告")
+    async def cmd_publish_announcement(self, event: AstrMessageEvent):
+        """发布公告（管理员）"""
+        await self._ensure_db()
+
+        user_id = str(event.get_sender_id())
+
+        # 检查是否为管理员
+        if user_id not in CONFIG.ADMIN_IDS:
+            yield event.plain_result("❌ 权限不足！此命令仅管理员可用")
+            return
+
+        args = event.message_str.split(maxsplit=1)
+        if len(args) < 2:
+            yield event.plain_result("❌ 用法：/发布公告 [内容]")
+            return
+
+        content = args[1].strip()
+        # 使用内容前20字作为标题
+        title = content[:20] + "..." if len(content) > 20 else content
+
+        result = await self.announcement_service.publish_announcement(
+            title=title,
+            content=content,
+            author_id=user_id,
+            author_name="管理员"
+        )
+
+        if result.get("success"):
+            yield event.plain_result(
+                f"✅ 公告发布成功！\n"
+                f"═══════════════════\n"
+                f"📝 {title}\n"
+                f"📅 {result.get('publish_time', '')}"
+            )
+        else:
+            yield event.plain_result(f"❌ {result.get('message', '发布失败')}")
+
+    # ============== 股市系统命令 ==============
+
     @filter.command("股市")
     async def cmd_stock_market(self, event: AstrMessageEvent):
-        """股市行情"""
+        """查看股市行情"""
         await self._ensure_db()
-        
+
         stocks = await self.stock_service.get_stock_market()
-        
+
+        if not stocks:
+            yield event.plain_result("📊 股市暂无上市公司\n发送 /创立公司 创建你的公司")
+            return
+
+        # 获取市场情绪
+        market_sentiment = await self.stock_service.get_market_sentiment()
+        sentiment_emoji = {"恐慌": "😱", "悲观": "😔", "中立": "😐", "乐观": "😊", "贪婪": "🤑"}
+
         lines = [
-            "🎁 索拉里斯证券交易所",
-            "═══════════════════",
-            "💡 价格每10分钟刷新",
-            "🎁 指令：/买入 股票名 数量 | /卖出 股票名 数量 | /持仓 | /股东 股票名",
+            f"📈 股市行情 - 市场情绪: {sentiment_emoji.get(market_sentiment, '😐')} {market_sentiment}",
             "═══════════════════"
         ]
-        
+
         for stock in stocks:
-            # 获取每支股票的独立情绪
-            sentiment = await self.stock_service.get_stock_sentiment(stock['name'])
-            sentiment_emoji = {
-                "恐慌": "😱", "悲观": "😞", "中立": "😐", "乐观": "😊", "贪婪": "🤑"
-            }.get(sentiment, "😐")
-            
-            lines.append(f"{stock['emoji']} {stock['name']} {sentiment_emoji}")
-            lines.append(f"    💰 当前价：{stock['price']:.2f}（较开盘{stock['arrow']}{stock['change_pct']:+.2f}%）")
-            lines.append(f"    💎 市值：{format_num(stock['market_cap'])} 星声{stock['owner_str']}")
-            lines.append(f"   🎁 {stock['desc']}")
-            lines.append("")
-        
+            lines.append(
+                f"{stock['emoji']} {stock['name']}"
+                f"\n   💰 当前价: {format_num(int(stock['price']))} 星声 {stock['arrow']} {stock['change_pct']:.2f}%"
+                f"\n   📊 市值: {format_num(stock['market_cap'])} 星声"
+                f"{stock['owner_str']}"
+            )
+
+        lines.extend([
+            "",
+            "💡 使用 /买入 [股票名] [数量] 购买股票",
+            "💡 使用 /持仓 查看你的股票持仓",
+            "💡 使用 /k线 [股票名] 查看价格走势"
+        ])
+
         yield event.plain_result("\n".join(lines))
-    
+
+    @filter.command("持仓")
+    async def cmd_portfolio(self, event: AstrMessageEvent):
+        """查看股票持仓"""
+        await self._ensure_db()
+
+        user_id = str(event.get_sender_id())
+        portfolio = await self.stock_service.get_portfolio(user_id)
+
+        if not portfolio.get("success"):
+            yield event.plain_result(portfolio.get("message", "获取持仓失败"))
+            return
+
+        lines = ["📊 我的股票持仓", "═══════════════════"]
+
+        for item in portfolio["portfolio"]:
+            lines.append(
+                f"{item['emoji']} {item['stock_name']}"
+                f"\n   📦 持有: {item['quantity']:.2f}股"
+                f"\n   💰 现价: {format_num(int(item['current_price']))} | 成本: {format_num(int(item['avg_cost']))}"
+                f"\n   📈 市值: {format_num(item['market_value'])} | 盈亏: {item['arrow']} {format_num(item['profit'])} ({item['profit_pct']:.1f}%)"
+            )
+
+        lines.extend([
+            "",
+            f"💎 总市值: {format_num(portfolio['total_value'])} 星声",
+            f"💳 总成本: {format_num(portfolio['total_cost'])} 星声",
+            f"📊 总盈亏: {format_num(portfolio['total_profit'])} ({portfolio['total_profit_pct']:.1f}%)"
+        ])
+
+        yield event.plain_result("\n".join(lines))
+
     @filter.command("买入")
     async def cmd_buy_stock(self, event: AstrMessageEvent):
         """买入股票"""
         await self._ensure_db()
-        
+
         user_id = str(event.get_sender_id())
-        parts = event.message_str.split()
-        
-        if len(parts) < 3:
-            yield event.plain_result("? 用法：/买入 股票名 数量")
+        args = event.message_str.split()
+
+        if len(args) < 3:
+            yield event.plain_result(
+                "❌ 用法：/买入 [股票名] [数量]\n"
+                "📋 示例：/买入 腾讯 100"
+            )
             return
-        
-        stock_name = parts[1]
+
+        stock_name = args[1]
         try:
-            quantity = float(parts[2])
-            if quantity <= 0:
-                raise ValueError()
-        except Exception as e:
-            pass  # 修复：原变量y未定义：添加具体异常类型ield event.plain_result("? 数量格式错误")
+            quantity = float(args[2])
+        except ValueError:
+            yield event.plain_result("❌ 数量必须是数字")
             return
-        
+
         result = await self.stock_service.buy_stock(user_id, stock_name, quantity)
-        if not result["success"]:
-            yield event.plain_result(result["message"])
-            return
-        
-        yield event.plain_result(
-            f"⛔ 买入成功！\n"
-            f"🎁 {result['stock_name']}\n"
-            f"🎁 买入价：{result['price']:.2f}\n"
-            f" 数量：{result['quantity']}\n"
-            f" 花费：{format_num(result['total_cost'])}星声"
-        )
-    
+
+        if result.get("success"):
+            lines = [
+                f"✅ 买入成功！",
+                f"═══════════════════",
+                f"📈 股票: {result['stock_name']}",
+                f"💰 价格: {format_num(int(result['price']))} 星声/股",
+                f"📦 数量: {result['quantity']:.2f}股",
+                f"💳 总花费: {format_num(result['total_cost'])} 星声"
+            ]
+            if result.get("price_impact"):
+                lines.append(result["price_impact"])
+            yield event.plain_result("\n".join(lines))
+        else:
+            yield event.plain_result(f"❌ {result.get('message', '买入失败')}")
+
     @filter.command("卖出")
     async def cmd_sell_stock(self, event: AstrMessageEvent):
         """卖出股票"""
         await self._ensure_db()
-        
+
         user_id = str(event.get_sender_id())
-        parts = event.message_str.split()
-        
-        if len(parts) < 3:
-            yield event.plain_result("? 用法：/卖出 股票名 数量")
+        args = event.message_str.split()
+
+        if len(args) < 3:
+            yield event.plain_result(
+                "❌ 用法：/卖出 [股票名] [数量]\n"
+                "📋 示例：/卖出 腾讯 100"
+            )
             return
-        
-        stock_name = parts[1]
+
+        stock_name = args[1]
         try:
-            want_sell = float(parts[2])
-            if want_sell <= 0:
-                raise ValueError()
-        except Exception as e:
-            pass  # 修复：原变量y未定义：添加具体异常类型ield event.plain_result("? 数量格式错误")
+            quantity = float(args[2])
+        except ValueError:
+            yield event.plain_result("❌ 数量必须是数字")
             return
-        
-        result = await self.stock_service.sell_stock(user_id, stock_name, want_sell)
-        if not result["success"]:
-            yield event.plain_result(result["message"])
-            return
-        
-        lines = [
-            f"⛔ 卖出成功！",
-            f"🎁 {result['stock_name']}",
-            f"🎁 卖出价：{result['price']:.2f}",
-            f"🎁 数量：{result['quantity']}",
-            f"🎁 成交额：{format_num(result['sell_amount'])}星声"
-        ]
-        
-        if result.get('is_nuo_member', False):
-            lines.append(f"🍚 弗糯结社福利：手续费全免！")
+
+        result = await self.stock_service.sell_stock(user_id, stock_name, quantity)
+
+        if result.get("success"):
+            lines = [
+                f"✅ 卖出成功！",
+                f"═══════════════════",
+                f"📉 股票: {result['stock_name']}",
+                f"💰 价格: {format_num(int(result['price']))} 星声/股",
+                f"📦 数量: {result['quantity']:.2f}股",
+                f"💵 卖出金额: {format_num(result['sell_amount'])} 星声"
+            ]
+            if result.get("is_nuo_member"):
+                lines.append("🎁 弗糯结社福利：免手续费")
+            else:
+                lines.append(f"💸 手续费: {format_num(result['fee'])} 星声")
+            lines.append(f"💳 净收入: {format_num(result['net_amount'])} 星声")
+            if result.get("price_impact"):
+                lines.append(result["price_impact"])
+            yield event.plain_result("\n".join(lines))
         else:
-            lines.append(f"🎁 手续费：{format_num(result['fee'])}")
-        
-        lines.append(f"  净收入：{format_num(result['net_amount'])}星声")
-        
-        yield event.plain_result("\n".join(lines))
-    
-    @filter.command("持仓")
-    async def cmd_portfolio(self, event: AstrMessageEvent):
-        """查看持仓"""
-        await self._ensure_db()
-        
-        user_id = str(event.get_sender_id())
-        result = await self.stock_service.get_portfolio(user_id)
-        
-        if not result["success"]:
-            yield event.plain_result(result["message"])
-            return
-        
-        lines = ["🎁 我的持仓", "═══════════════════"]
-        
-        for item in result["portfolio"]:
-            lines.append(f"{item['emoji']} {item['stock_name']}")
-            lines.append(f"   🎁 持有：{item['quantity']:.2f} | 成本：{item['avg_cost']:.2f}")
-            lines.append(f"   🎁 现价：{item['current_price']:.2f} | 市值：{format_num(item['market_value'])}")
-            lines.append(f"   {item['arrow']} 盈亏：{item['profit']:+,} ({item['profit_pct']:+.2f}%)")
-            lines.append("")
-        
-        lines.extend([
-            "═══════════════════",
-            f"🎁 总市值：{format_num(result['total_value'])}",
-            f"🎁 总成本：{format_num(result['total_cost'])}",
-            f" 总盈亏：{result['total_profit']:+,} ({result['total_profit_pct']:+.2f}%)"
-        ])
-        
-        yield event.plain_result("\n".join(lines))
-    
+            yield event.plain_result(f"❌ {result.get('message', '卖出失败')}")
+
     @filter.command("创立公司")
     async def cmd_create_company(self, event: AstrMessageEvent):
         """创立上市公司"""
         await self._ensure_db()
-        
-        user_id = str(event.get_sender_id())
-        parts = event.message_str.split()
-        
-        if len(parts) < 4:
-            yield event.plain_result("💡 用法：/创立公司 公司名 初始股价 简介\n例：/创立公司 莫宁科技 100 探索未知的科技公司")
-            return
-        
-        company_name = parts[1]
-        try:
-            init_price = float(parts[2])
-            if init_price < 1 or init_price > 10000:
-                raise ValueError()
-        except Exception as e:
-            pass  # 修复：原变量y未定义：添加具体异常类型ield event.plain_result("? 初始股价需在1-10000之间")
-            return
-        
-        desc = " ".join(parts[3:]) if len(parts) > 3 else "玩家创立的企业"
-        
-        result = await self.stock_service.create_company(user_id, company_name, init_price, desc)
-        if not result["success"]:
-            yield event.plain_result(result["message"])
-            return
-        
-        yield event.plain_result(
-            f"🎁 公司创立成功！\n"
-            f"🎁 {result['company_name']}\n"
-            f"🎁 初始股价：{result['init_price']:.2f}星声\n"
-            f" {result['desc']}\n"
-            f"🎁 启动资金：{format_num(result['required'])}星声\n"
-            f" 您获得10万股创始股份"
-        )
-    
-    @filter.command("宣告破产")
-    async def cmd_bankrupt(self, event: AstrMessageEvent):
-        """宣告公司破产"""
-        await self._ensure_db()
-        
-        user_id = str(event.get_sender_id())
-        parts = event.message_str.split()
-        
-        if len(parts) < 2:
-            yield event.plain_result("💡 用法：/宣告破产 公司名")
-            return
-        
-        company_name = parts[1]
-        
-        result = await self.stock_service.bankrupt(user_id, company_name)
-        if not result["success"]:
-            yield event.plain_result(result["message"])
-            return
-        
-        yield event.plain_result(
-            f"🎁 {result['company_name']} 已宣告破产退市\n"
-            f"所有股东持仓将保留但无法交易"
-        )
-    
-    @filter.command("研发")
-    async def cmd_research(self, event: AstrMessageEvent):
-        """公司研发（提升股价）"""
-        await self._ensure_db()
-        
-        user_id = str(event.get_sender_id())
-        parts = event.message_str.split()
-        
-        if len(parts) < 3:
-            yield event.plain_result("💡 用法：/研发 公司名 投入金额")
-            return
-        
-        company_name = parts[1]
-        try:
-            amount = int(parts[2])
-            if amount < 10000:
-                raise ValueError()
-        except Exception as e:
-            pass  # 修复：原变量y未定义：添加具体异常类型ield event.plain_result("? 研发资金至少10000星声")
-            return
-        
-        result = await self.stock_service.research(user_id, company_name, amount)
-        if not result["success"]:
-            yield event.plain_result(result["message"])
-            return
-        
-        yield event.plain_result(
-            f" 研发成功！\n"
-            f"🎁 {result['company_name']}\n"
-            f"🎁 投入：{format_num(result['amount'])}星声\n"
-            f" 股价提升：+{result['boost']*100:.2f}%\n"
-            f" 新股价：{result['new_price']:.2f}星声"
-        )
-    
-    @filter.command("股东")
-    async def cmd_shareholders(self, event: AstrMessageEvent):
-        """查看股东列表"""
-        await self._ensure_db()
-        
-        user_id = str(event.get_sender_id())
-        parts = event.message_str.split()
-        
-        if len(parts) < 2:
-            yield event.plain_result("💡 用法：/股东 股票名")
-            return
-        
-        stock_name = parts[1]
-        
-        result = await self.stock_service.get_shareholders(stock_name)
-        if not result["success"]:
-            yield event.plain_result(result["message"])
-            return
-        
-        lines = [f"🎁 {result['stock_name']} 股东列表", "═══════════════════"]
-        
-        if result["controlling_shareholder"]:
-            lines.append(f"🎁 控股股东：{result['controlling_shareholder']['name']}")
-            lines.append("")
-        
-        lines.append(f"🎁 总股数：{result['total_shares']:.2f}")
-        lines.append("")
-        lines.append("股东列表：")
-        lines.append("─────────────────────")
-        
-        for shareholder in result["shareholders"]:
-            lines.append(f"{shareholder['name']}: {shareholder['shares']:.2f}股 ({shareholder['ratio']:.2f}%)")
-        
-        yield event.plain_result("\n".join(lines))
-    
-    @filter.command("k线")
-    async def cmd_stock_kline(self, event: AstrMessageEvent):
-        """查看股票价格走势（生成图片，显示持仓）"""
-        await self._ensure_db()
 
         user_id = str(event.get_sender_id())
-        parts = event.message_str.split()
+        args = event.message_str.split(maxsplit=2)
 
-        if len(parts) < 2:
-            yield event.plain_result("用法：/k线 股票名")
-            return
-
-        stock_name = parts[1]
-
-        # 获取价格数据
-        result = await self.stock_service.get_stock_kline(stock_name)
-        if not result["success"]:
-            yield event.plain_result(result["message"])
-            return
-
-        price_data = result.get("price_data", [])
-
-        # 获取用户持仓信息
-        user_holdings = None
-        try:
-            holding_details = await self.stock_service.get_stock_holding_details(user_id, stock_name)
-            if holding_details.get("has_holding"):
-                user_holdings = {
-                    "total_quantity": holding_details["total_quantity"],
-                    "avg_price": holding_details["avg_price"],
-                    "buy_points": holding_details["buy_points"],
-                    "sell_points": holding_details["sell_points"]
-                }
-        except Exception as e:
-            logger.warning(f"获取持仓信息失败: {e}")
-
-        # 生成图片
-        try:
-            image_bytes = generate_stock_chart(result['stock_name'], price_data, user_holdings)
-            # 使用 AstrBot 的 Image 组件发送图片
-            from astrbot.api.message_components import Image, Plain
-            yield event.chain_result([Plain(f"{result['stock_name']} 价格走势"), Image.fromBytes(image_bytes)])
-        except Exception as e:
-            import traceback
-            logger.error(f"生成股票图表失败: {e}")
-            logger.error(f"异常详情: {traceback.format_exc()}")
-            # 如果图片生成失败，回退到文本显示
-            if not price_data:
-                yield event.plain_result(f"{result['stock_name']}\n暂无价格数据")
-                return
-            prices = [d['price'] for d in price_data]
+        if len(args) < 3:
             yield event.plain_result(
-                f"{result['stock_name']} 价格走势\n"
-                f"当前: {prices[-1]:.2f}\n"
-                f"(图片生成失败: {e})"
+                f"❌ 用法：/创立公司 [公司名] [初始股价] [描述]\n"
+                f"📋 示例：/创立公司 我的公司 100 这是一家好公司\n"
+                f"💰 需要资金: {format_num(CONFIG.STOCK_MIN_CAPITAL)} 星声"
             )
-    
-    # ============== 结社系统 ==============
+            return
+
+        company_name = args[1]
+        try:
+            init_price = float(args[2].split()[0])  # 取数字部分
+        except ValueError:
+            yield event.plain_result("❌ 初始股价必须是数字")
+            return
+
+        desc = args[2][len(str(init_price)):].strip() if len(args[2].split()) > 1 else "玩家创立的公司"
+
+        result = await self.stock_service.create_company(user_id, company_name, init_price, desc)
+
+        if result.get("success"):
+            yield event.plain_result(
+                f"🎉 公司创立成功！\n"
+                f"═══════════════════\n"
+                f"🏢 公司名: {result['company_name']}\n"
+                f"💰 初始股价: {format_num(int(result['init_price']))} 星声\n"
+                f"📝 描述: {result['desc']}\n"
+                f"💵 消耗资金: {format_num(result['required'])} 星声\n"
+                f"📦 获得股份: 100,000股（创始人股份）"
+            )
+        else:
+            yield event.plain_result(f"❌ {result.get('message', '创立失败')}")
+
+    @filter.command("k线")
+    async def cmd_kline(self, event: AstrMessageEvent):
+        """查看股票K线图"""
+        await self._ensure_db()
+
+        args = event.message_str.split()
+
+        if len(args) < 2:
+            yield event.plain_result(
+                "❌ 用法：/k线 [股票名]\n"
+                "📋 示例：/k线 腾讯\n"
+                "📊 显示最近24小时的价格走势"
+            )
+            return
+
+        stock_name = args[1]
+
+        # 获取K线数据
+        kline_data = await self.stock_service.get_stock_kline(stock_name)
+
+        if not kline_data.get("success"):
+            yield event.plain_result(f"❌ {kline_data.get('message', '获取K线数据失败')}")
+            return
+
+        price_data = kline_data.get("price_data", [])
+
+        if not price_data:
+            yield event.plain_result(f"📊 {stock_name} 暂无价格数据")
+            return
+
+        # 构建简单的文本K线图
+        lines = [f"📈 {stock_name} - 24小时价格走势", "═══════════════════"]
+
+        # 找出最高和最低价
+        prices = [p["price"] for p in price_data]
+        max_price = max(prices)
+        min_price = min(prices)
+        current_price = prices[-1] if prices else 0
+
+        lines.append(f"💰 当前: {format_num(int(current_price))} | 📈 最高: {format_num(int(max_price))} | 📉 最低: {format_num(int(min_price))}")
+        lines.append("")
+
+        # 显示最近10个数据点
+        recent_data = price_data[-10:] if len(price_data) > 10 else price_data
+
+        for data in recent_data:
+            time_str = data["timestamp"][-5:] if len(data["timestamp"]) > 5 else data["timestamp"]  # 只显示 HH:MM
+            price = data["price"]
+            # 简单的可视化
+            bar_length = int((price - min_price) / (max_price - min_price) * 20) if max_price > min_price else 10
+            bar = "█" * bar_length
+            lines.append(f"{time_str} |{bar} {format_num(int(price))}")
+
+        yield event.plain_result("\n".join(lines))
+
+    # ============== 结社系统命令 ==============
+
     @filter.command("结社")
     async def cmd_society(self, event: AstrMessageEvent):
-        """结社看板"""
+        """查看结社信息（所有结社列表或我的结社）"""
         await self._ensure_db()
-        
+
+        user_id = str(event.get_sender_id())
+
+        # 先尝试获取我的结社
+        my_society = await self.society_service.get_my_society(user_id)
+
+        # 获取结社统计
         stats = await self.society_service.get_society_stats()
-        
-        lines = ["  索拉里斯秘密结社", "═══════════════════"]
-        
-        if stats["total"] == 0:
-            lines.append("目前还没有人加入任何结社")
-        else:
-            lines.append(f"🎁 总成员：{stats['total']} 人")
+
+        lines = ["🏢 结社列表", "═══════════════════"]
+
+        for name, config in CONFIG.SOCIETIES.items():
+            emoji = config.get('emoji', '🔮')
+            desc = config.get('desc', '')
+            stat = stats.get('stats', {}).get(name, {})
+            count = stat.get('count', 0)
+            percentage = stat.get('percentage', 0)
+
+            # 标记我所在的结社
+            is_my_society = my_society.get('success') and my_society.get('society_name') == name
+            marker = " ✅" if is_my_society else ""
+
+            lines.append(f"{emoji} {name}{marker}")
+            lines.append(f"   📝 {desc}")
+            lines.append(f"   👥 成员：{count}人 ({percentage:.1f}%)")
             lines.append("")
-            
-            for name, config in CONFIG.SOCIETIES.items():
-                data = stats["stats"].get(name, {"count": 0, "percentage": 0})
-                benefit = await self.society_service.get_society_benefit_detail(name)
-                lines.append(f"{config['emoji']} {name}")
-                lines.append(f"   🎁 人数：{data['count']} 人 ({data['percentage']:.1f}%)")
-                lines.append(f"   🎁 {config['desc']}")
-                if benefit:
-                    lines.append(f"   🎁 福利：{benefit['type']} - {benefit['detail']}")
-                lines.append("")
-        
-        lines.append("💡 用法：/加入结社 结社名")
-        
+
+        # 如果已加入结社，显示我的结社信息
+        if my_society.get('success'):
+            lines.extend([
+                "═══════════════════",
+                f"{my_society.get('emoji', '🔮')} 我的结社：{my_society.get('society_name', '')}",
+                f"👥 成员数：{my_society.get('member_count', 0)} 人",
+            ])
+
+            # 显示福利
+            benefits = my_society.get('benefits', {})
+            if benefits:
+                lines.append(f"🎁 福利：{benefits.get('detail', '')}")
+
+            # 显示结社第一
+            top_user = my_society.get('top_user', {})
+            if top_user:
+                is_me = top_user.get('is_me', False)
+                title = top_user.get('title', '结社第一')
+                if is_me:
+                    lines.append(f"👑 你是本结社资产第一！({title})")
+
+        lines.extend([
+            "",
+            "💡 使用 /结社信息 [结社名] 查看详情",
+            "💡 使用 /加入结社 [结社名] 加入结社"
+        ])
+
         yield event.plain_result("\n".join(lines))
-    
+
+    @filter.command("结社信息")
+    async def cmd_society_info(self, event: AstrMessageEvent):
+        """查看指定结社详情"""
+        await self._ensure_db()
+
+        args = event.message_str.split(maxsplit=1)
+        if len(args) < 2:
+            yield event.plain_result(
+                "❌ 请指定结社名称\n"
+                "📋 用法：/结社信息 [结社名]\n"
+                "💡 可用结社：" + ", ".join(CONFIG.SOCIETIES.keys())
+            )
+            return
+
+        society_name = args[1].strip()
+        if society_name not in CONFIG.SOCIETIES:
+            yield event.plain_result(
+                f"❌ 结社不存在！\n"
+                f"📋 可用结社：{', '.join(CONFIG.SOCIETIES.keys())}"
+            )
+            return
+
+        config = CONFIG.SOCIETIES[society_name]
+        benefits = await self.society_service.get_society_benefit_detail(society_name)
+
+        lines = [
+            f"{config.get('emoji', '🔮')} {society_name}",
+            "═══════════════════",
+            f"📝 {config.get('desc', '')}",
+            ""
+        ]
+
+        # 显示福利详情
+        if benefits:
+            lines.append(f"🎁 结社福利：{benefits.get('type', '')}")
+            lines.append(f"   {benefits.get('detail', '')}")
+            lines.append("")
+
+        lines.extend([
+            f"⏰ 更换冷却：{CONFIG.SOCIETY_COOLDOWN}小时",
+            "",
+            "💡 使用 /加入结社 [结社名] 加入此结社"
+        ])
+
+        yield event.plain_result("\n".join(lines))
+
     @filter.command("加入结社")
     async def cmd_join_society(self, event: AstrMessageEvent):
-        """加入结社"""
+        """加入指定结社"""
         await self._ensure_db()
-        
+
         user_id = str(event.get_sender_id())
-        parts = event.message_str.split()
-        
-        if len(parts) < 2:
-            yield event.plain_result("💡 用法：/加入结社 结社名")
+        args = event.message_str.split(maxsplit=1)
+
+        if len(args) < 2:
+            yield event.plain_result(
+                "❌ 请指定结社名称\n"
+                "📋 用法：/加入结社 [结社名]\n"
+                "💡 可用结社：" + ", ".join(CONFIG.SOCIETIES.keys())
+            )
             return
-        
-        society_name = parts[1]
-        
+
+        society_name = args[1].strip()
         result = await self.society_service.join_society(user_id, society_name)
-        if not result["success"]:
-            yield event.plain_result(result["message"])
+
+        if result.get("success"):
+            yield event.plain_result(
+                f"✅ 成功加入 {result.get('emoji', '🔮')} {society_name}！\n"
+                f"═══════════════════\n"
+                f"📝 {result.get('desc', '')}\n"
+                f"\n"
+                f"💡 使用 /我的结社 查看结社详情和福利"
+            )
+        else:
+            yield event.plain_result(f"❌ {result.get('message', '加入失败')}")
+
+    @filter.command("离开结社")
+    async def cmd_leave_society(self, event: AstrMessageEvent):
+        """离开当前结社"""
+        await self._ensure_db()
+
+        user_id = str(event.get_sender_id())
+
+        # 使用society_service离开结社
+        result = await self.society_service.leave_society(user_id)
+
+        if not result['success']:
+            yield event.plain_result(f"❌ {result['message']}")
             return
-        
+
         yield event.plain_result(
-            f"⛔ 成功加入 {result['emoji']}{result['society_name']}！\n"
-            f"🎁 {result['desc']}"
+            f"✅ {result['message']}\n"
+            f"⏰ 冷却时间：{CONFIG.SOCIETY_COOLDOWN}小时后可以加入新结社"
         )
-    
+
     @filter.command("我的结社")
     async def cmd_my_society(self, event: AstrMessageEvent):
         """查看我的结社信息"""
@@ -2817,318 +2065,284 @@ class EconomyPlugin(Star):
         user_id = str(event.get_sender_id())
         result = await self.society_service.get_my_society(user_id)
 
-        if not result["success"]:
-            yield event.plain_result(result["message"])
+        if not result.get("success"):
+            yield event.plain_result(
+                f"💼 你还没有加入任何结社\n"
+                f"═══════════════════\n"
+                f"📋 可用结社：\n"
+            )
+            for name, config in CONFIG.SOCIETIES.items():
+                yield event.plain_result(
+                    f"{config.get('emoji', '🔮')} {name} - {config.get('desc', '')}"
+                )
+            yield event.plain_result(
+                f"\n💡 使用 /加入结社 [结社名] 加入结社\n"
+                f"💡 使用 /结社列表 查看所有结社"
+            )
             return
 
         lines = [
-            f"{result['emoji']} {result['society_name']}",
+            f"{result.get('emoji', '🔮')} 我的结社：{result.get('society_name', '')}",
             "═══════════════════",
-            f"🎁 {result['desc']}",
-            f"🎁 成员：{result['member_count']}人",
-            f"🎁 加入时间：{result['join_time']}"
+            f"📝 {result.get('desc', '')}",
+            f"👥 成员数：{result.get('member_count', 0)} 人",
+            f"📅 加入时间：{result.get('join_time', '')}",
+            ""
         ]
 
-        # 显示结社福利
-        if result.get("benefits"):
+        # 显示福利
+        benefits = result.get('benefits', {})
+        if benefits:
+            lines.append(f"🎁 结社福利：{benefits.get('type', '')}")
+            lines.append(f"   {benefits.get('detail', '')}")
             lines.append("")
-            lines.append("🎁 结社福利：")
-            lines.append(f"   {result['benefits']['type']}：{result['benefits']['detail']}")
 
         # 显示结社第一
-        if result.get("top_user") and result["top_user"]:
-            lines.append("")
-            top_user = result["top_user"]
-            if top_user["is_me"]:
-                lines.append(f"🎁 {top_user['title']}：{top_user['name']}（你）")
+        top_user = result.get('top_user', {})
+        if top_user:
+            is_me = top_user.get('is_me', False)
+            title = top_user.get('title', '结社第一')
+            if is_me:
+                lines.append(f"👑 你是本结社资产第一！({title})")
             else:
-                lines.append(f"🎁 {top_user['title']}：{top_user['name']}")
-            lines.append(f"   资产：{format_num(top_user['asset'])}星声")
+                lines.append(f"👑 本结社资产第一：{mask_id(top_user.get('uid', ''))} ({title})")
+            lines.append("")
 
-        lines.append("")
-        lines.append(f"? 更换冷却：{result['cooldown']}小时")
+        lines.extend([
+            f"⏰ 更换冷却：{result.get('cooldown', 24)}小时",
+            "",
+            "💡 使用 /离开结社 退出当前结社"
+        ])
 
         yield event.plain_result("\n".join(lines))
 
-    # ============== 公告功能 ==============
-    @filter.command("发布公告")
-    async def cmd_publish_announcement(self, event: AstrMessageEvent):
-        """发布公告到所有群 - /发布公告 <内容>"""
+    # ============== 工作系统命令 ==============
+
+    @filter.command("找工作")
+    async def cmd_find_work(self, event: AstrMessageEvent):
+        """查看可应聘的工作列表"""
+        await self._ensure_db()
+
+        works = await self.work_service.get_works()
+
+        lines = ["💼 工作列表", "═══════════════════"]
+
+        for name, config in works.items():
+            emoji = config.get('emoji', '💼')
+            desc = config.get('desc', '')
+            price = config.get('price', 0)
+            min_pay = config.get('min', 0)
+            max_pay = config.get('max', 0)
+
+            lines.append(f"{emoji} {name}")
+            lines.append(f"   📝 {desc}")
+            lines.append(f"   💰 应聘费用：{format_num(price)} 星声")
+            lines.append(f"   📈 时薪：{format_num(min_pay)}-{format_num(max_pay)} 星声/小时")
+            lines.append("")
+
+        lines.extend([
+            "═══════════════════",
+            "💡 使用 /应聘 [工作名] 应聘工作",
+            "💡 使用 /工作状态 查看当前工作",
+            "💡 使用 /领工资 领取累计工资"
+        ])
+
+        yield event.plain_result("\n".join(lines))
+
+    @filter.command("应聘")
+    async def cmd_apply_work(self, event: AstrMessageEvent):
+        """应聘指定工作"""
+        await self._ensure_db()
+
         user_id = str(event.get_sender_id())
-        
-        # 检查是否为管理员
-        if user_id not in CONFIG.ADMIN_IDS:
-            yield event.plain_result("⚠️ 权限不足！此命令仅管理员可用")
-            return
-        
-        await self._ensure_db()
-        
-        sender_name = self._get_sender_name(event)
-        
-        # 获取公告内容 - 使用 message_str 获取完整消息
-        msg_text = event.message_str
-        args = msg_text.split(maxsplit=1)
+        args = event.message_str.split(maxsplit=1)
+
         if len(args) < 2:
-            yield event.plain_result("📢 请输入公告内容：/发布公告 <内容>")
+            yield event.plain_result(
+                "❌ 请指定工作名称\n"
+                "📋 用法：/应聘 [工作名]\n"
+                "💡 使用 /找工作 查看可应聘职位"
+            )
             return
-        
-        content = args[1].strip()
-        if not content:
-            yield event.plain_result("📢 公告内容不能为空！")
-            return
-        
-        # 发布公告到数据库
-        title = "系统公告"
-        result = await self.announcement_service.publish_announcement(
-            title=title,
-            content=content,
-            author_id=user_id,
-            author_name=sender_name
-        )
-        
-        if not result["success"]:
-            yield event.plain_result(f"📢 发布公告失败：{result.get('message', '未知错误')}")
-            return
-        
-        # 广播到所有群
-        broadcast_result = await self._broadcast_announcement(event, content)
-        
-        yield event.plain_result(
-            f"📢 公告发布成功！\n"
-            f"内容：{content[:50]}{'...' if len(content) > 50 else ''}\n"
-            f"广播结果：成功 {broadcast_result['success']} 个群，失败 {broadcast_result['failed']} 个群"
-        )
-    
-    async def _broadcast_announcement(self, event, content: str) -> dict:
-        """广播公告到白名单群"""
-        success_count = 0
-        failed_count = 0
 
-        # 从config_manager获取白名单（持久化存储）
-        whitelist_data = await self.config_manager.get("announcement_whitelist")
-        if whitelist_data:
-            try:
-                whitelist = json.loads(whitelist_data)
-            except:
-                whitelist = ["1047215229", "468563035", "1078585038"]
+        work_name = args[1].strip()
+        result = await self.work_service.apply_work(user_id, work_name)
+
+        if result.get("success"):
+            yield event.plain_result(
+                f"✅ 应聘成功！\n"
+                f"═══════════════════\n"
+                f"{result.get('emoji', '💼')} {work_name}\n"
+                f"📝 {CONFIG.WORKS.get(work_name, {}).get('desc', '')}\n"
+                f"💰 应聘费用：{format_num(result.get('price', 0))} 星声\n"
+                f"📅 开始时间：{result.get('start_time', '')}\n"
+                f"\n"
+                f"💡 使用 /工作状态 查看工作进度\n"
+                f"💡 使用 /领工资 领取工资"
+            )
         else:
-            whitelist = ["1047215229", "468563035", "1078585038"]
+            yield event.plain_result(f"❌ {result.get('message', '应聘失败')}")
 
-        if not whitelist:
-            logger.warning("公告白名单为空，无法广播")
-            return {"success": 0, "failed": 0, "skipped": 0}
-        
-        try:
-            # 使用 context 获取平台管理器
-            if hasattr(self, 'context') and self.context:
-                try:
-                    # 获取所有平台实例
-                    platform_insts = self.context.platform_manager.platform_insts
-                    
-                    for platform in platform_insts:
-                        try:
-                            # 获取平台适配器
-                            adapter = platform
-                            if hasattr(adapter, 'bot'):
-                                bot = adapter.bot
-                                
-                                # 只发送到白名单中的群
-                                for group_id_str in whitelist:
-                                    try:
-                                        group_id = int(group_id_str)
-                                        # 构造公告消息
-                                        announcement_msg = f"📢【系统公告】📢\n═══════════════════\n{content}\n═══════════════════\n⏰ 发布时间：{get_beijing_time().strftime('%Y-%m-%d %H:%M')}"
-                                        
-                                        # 发送群消息
-                                        await bot.api.call_action(
-                                            "send_group_msg",
-                                            group_id=group_id,
-                                            message=[{"type": "text", "data": {"text": announcement_msg}}]
-                                        )
-                                        success_count += 1
-                                        logger.info(f"公告已发送到群 {group_id}")
-                                    except Exception as e:
-                                        logger.warning(f"广播到群 {group_id_str} 失败: {e}")
-                                        failed_count += 1
-                        except Exception as e:
-                            logger.warning(f"获取平台适配器失败: {e}")
-                            continue
-                except Exception as e:
-                    logger.warning(f"获取平台实例失败: {e}")
-                    failed_count = len(whitelist)
-            else:
-                # 尝试使用 event.bot
-                if hasattr(event, 'bot') and event.bot:
-                    try:
-                        # 只发送到白名单中的群
-                        for group_id_str in whitelist:
-                            try:
-                                group_id = int(group_id_str)
-                                announcement_msg = f"📢【系统公告】📢\n═══════════════════\n{content}\n═══════════════════\n⏰ 发布时间：{get_beijing_time().strftime('%Y-%m-%d %H:%M')}"
-                                
-                                await event.bot.api.call_action(
-                                    "send_group_msg",
-                                    group_id=group_id,
-                                    message=[{"type": "text", "data": {"text": announcement_msg}}]
-                                )
-                                success_count += 1
-                                logger.info(f"公告已发送到群 {group_id}")
-                            except Exception as e:
-                                logger.warning(f"广播到群 {group_id_str} 失败: {e}")
-                                failed_count += 1
-                    except Exception as e:
-                        logger.warning(f"使用 event.bot 广播失败: {e}")
-                        failed_count = len(whitelist)
-                else:
-                    logger.warning("无法获取 bot 实例，无法广播公告")
-                    failed_count = len(whitelist)
-        except Exception as e:
-            logger.error(f"广播公告时出错: {e}")
-            failed_count = len(whitelist)
-        
-        return {"success": success_count, "failed": failed_count}
-    
-    @filter.command("公告")
-    async def cmd_announcement(self, event: AstrMessageEvent):
-        """查看最新公告 - /公告"""
+    @filter.command("工作状态")
+    async def cmd_work_status(self, event: AstrMessageEvent):
+        """查看当前工作状态"""
         await self._ensure_db()
-        
-        # 获取最新公告
-        announcement = await self.announcement_service.get_latest_announcement()
-        
-        if not announcement:
-            yield event.plain_result("📢 暂无公告")
+
+        user_id = str(event.get_sender_id())
+        result = await self.work_service.get_work_status(user_id)
+
+        if not result.get("success"):
+            yield event.plain_result(
+                f"{result.get('message', '获取工作状态失败')}\n"
+                f"💡 使用 /找工作 查看可应聘职位"
+            )
             return
-        
+
         lines = [
-            f"📢【{announcement['title']}】📢",
+            f"{result.get('emoji', '💼')} 当前工作：{result.get('work_name', '')}",
             "═══════════════════",
-            f"{announcement['content']}",
-            "═══════════════════",
-            f"👤 发布者：{announcement['author_name']}",
-            f"⏰ 发布时间：{announcement['publish_time']}"
+            f"📝 {result.get('desc', '')}",
+            f"⏰ 已工作时间：{result.get('hours_passed', 0)} 小时",
+            f"💰 待领取工资：约 {format_num(result.get('pending', 0))} 星声",
+            f"💵 累计收入：{format_num(result.get('total_earned', 0))} 星声",
+            "",
+            "💡 使用 /领工资 领取累计工资"
         ]
-        
+
         yield event.plain_result("\n".join(lines))
-    
-    @filter.command("公告列表")
-    async def cmd_announcement_list(self, event: AstrMessageEvent):
-        """查看历史公告列表 - /公告列表"""
+
+    @filter.command("领工资")
+    async def cmd_claim_salary(self, event: AstrMessageEvent):
+        """领取工作工资"""
         await self._ensure_db()
-        
-        # 获取最近10条公告
-        announcements = await self.announcement_service.get_announcements(limit=10)
-        
-        if not announcements:
-            yield event.plain_result("📢 暂无公告")
-            return
-        
-        lines = ["📋【历史公告列表】📋", "═══════════════════"]
-        
-        for i, ann in enumerate(announcements, 1):
-            content_preview = ann['content'][:30] + "..." if len(ann['content']) > 30 else ann['content']
-            lines.append(f"{i}. {ann['title']}")
-            lines.append(f"   内容：{content_preview}")
-            lines.append(f"   时间：{ann['publish_time']}")
-            lines.append("")
 
-        lines.append(f"📊 共 {len(announcements)} 条公告")
-        lines.append("💡 使用 /公告 查看最新公告")
-        
-        yield event.plain_result("\n".join(lines))
-    
-    @filter.command("公告白名单")
-    async def cmd_announcement_whitelist(self, event: AstrMessageEvent):
-        """管理公告推送白名单 - /公告白名单 <add/remove/list> [群号]"""
         user_id = str(event.get_sender_id())
+        result = await self.work_service.claim_salary(user_id)
 
-        # 检查是否为管理员
-        if user_id not in CONFIG.ADMIN_IDS:
-            yield event.plain_result("⚠️ 权限不足！此命令仅管理员可用")
+        if result.get("success"):
+            lines = [
+                f"✅ 工资领取成功！",
+                "═══════════════════",
+                f"{result.get('emoji', '💼')} {result.get('work_name', '')}",
+                f"⏰ 工作时长：{result.get('hours', 0)} 小时",
+                f"💰 基础工资：{format_num(result.get('total_earnings', 0))} 星声"
+            ]
+
+            # 千衢结社福利
+            if result.get('qian_bonus', 0) > 0:
+                lines.append(f"⚡ 千衢结社加成：+{format_num(result.get('qian_bonus', 0))} 星声")
+
+            lines.extend([
+                f"💵 总收入：{format_num(result.get('final_earnings', 0))} 星声",
+                f"💳 当前余额：{format_num(result.get('new_balance', 0))} 星声"
+            ])
+
+            yield event.plain_result("\n".join(lines))
+        else:
+            yield event.plain_result(f"❌ {result.get('message', '领取失败')}")
+
+    # ============== 塔罗牌系统命令 ==============
+
+    @filter.command("塔罗牌")
+    async def cmd_tarot(self, event: AstrMessageEvent):
+        """抽取或查看今日塔罗牌"""
+        await self._ensure_db()
+
+        user_id = str(event.get_sender_id())
+        args = event.message_str.split()
+
+        # 检查是否是查看效果
+        if len(args) > 1 and args[1] == "效果":
+            result = await self.tarot_service.get_tarot_effect(user_id)
+
+            if not result['has_tarot']:
+                yield event.plain_result(
+                    "🎴 今日尚未抽取塔罗牌\n"
+                    "═══════════════════\n"
+                    "💡 使用 /塔罗牌 抽取今日塔罗牌"
+                )
+                return
+
+            yield event.plain_result(
+                f"🎴 今日塔罗牌效果\n"
+                f"═══════════════════\n"
+                f"【{result['card_name']}】\n"
+                f"📝 {result['desc']}\n"
+                f"\n"
+                f"✨ 效果类型：{result['effect_type']}\n"
+                f"📊 效果值：{result['effect_value']}\n"
+                f"📝 效果描述：{result['effect_desc']}"
+            )
             return
 
-        # 获取命令参数
-        msg_text = event.message_str
-        args = msg_text.split()
+        # 抽取塔罗牌
+        result = await self.tarot_service.draw_tarot(user_id)
 
-        # 从config_manager获取白名单（持久化存储）
-        whitelist_data = await self.config_manager.get("announcement_whitelist")
-        if whitelist_data:
-            try:
-                import json
-                whitelist = json.loads(whitelist_data)
-            except:
-                whitelist = ["1047215229", "468563035", "1078585038"]
-        else:
-            whitelist = ["1047215229", "468563035", "1078585038"]
-        
-        if len(args) < 2:
-            # 显示当前白名单
-            if not whitelist:
-                yield event.plain_result("📋 当前公告白名单为空\n💡 用法：/公告白名单 add 群号\n   /公告白名单 remove 群号\n   /公告白名单 list")
-                return
-            
-            lines = ["📋【公告推送白名单】", "═══════════════════"]
-            for i, group_id in enumerate(whitelist, 1):
-                lines.append(f"{i}. {group_id}")
-            lines.append("═══════════════════")
-            lines.append(f"📊 共 {len(whitelist)} 个群")
-            lines.append("💡 用法：/公告白名单 add 群号")
-            lines.append("   /公告白名单 remove 群号")
-            lines.append("   /公告白名单 list")
-            yield event.plain_result("\n".join(lines))
+        if result['already_drawn']:
+            yield event.plain_result(
+                f"🎴 今日已抽取塔罗牌\n"
+                f"═══════════════════\n"
+                f"【{result['card_name']}】\n"
+                f"📝 {result['desc']}\n"
+                f"✨ 效果：{result['effect'].get('desc', '')}\n"
+                f"\n"
+                f"💡 使用 /塔罗牌 效果 查看当前效果详情"
+            )
             return
-        
-        action = args[1].lower()
-        
-        if action == "list":
-            # 列出白名单
-            if not whitelist:
-                yield event.plain_result("📋 当前公告白名单为空")
-                return
-            
-            lines = ["📋【公告推送白名单】", "═══════════════════"]
-            for i, group_id in enumerate(whitelist, 1):
-                lines.append(f"{i}. {group_id}")
-            lines.append("═══════════════════")
-            lines.append(f"📊 共 {len(whitelist)} 个群")
-            yield event.plain_result("\n".join(lines))
-        
-        elif action == "add":
-            # 添加群到白名单
-            if len(args) < 3:
-                yield event.plain_result("📢 用法：/公告白名单 add 群号")
-                return
-            
-            group_id = args[2].strip()
-            if not group_id.isdigit():
-                yield event.plain_result("❌ 群号必须是数字！")
-                return
-            
-            if group_id in whitelist:
-                yield event.plain_result(f"📢 群 {group_id} 已在白名单中")
-                return
 
-            whitelist.append(group_id)
-            # 持久化到数据库
-            await self.config_manager.set("announcement_whitelist", json.dumps(whitelist))
-            yield event.plain_result(f"✅ 已添加群 {group_id} 到白名单\n📊 当前白名单共 {len(whitelist)} 个群")
-        
-        elif action == "remove":
-            # 从白名单移除群
-            if len(args) < 3:
-                yield event.plain_result("📢 用法：/公告白名单 remove 群号")
-                return
-            
-            group_id = args[2].strip()
-            if group_id not in whitelist:
-                yield event.plain_result(f"📢 群 {group_id} 不在白名单中")
-                return
+        lines = [
+            f"🎴 今日塔罗牌",
+            "═══════════════════",
+            f"【{result['card_name']}】",
+            f"📝 {result['desc']}",
+            f"✨ 效果：{result['effect'].get('desc', '')}",
+            ""
+        ]
 
-            whitelist.remove(group_id)
-            # 持久化到数据库
-            await self.config_manager.set("announcement_whitelist", json.dumps(whitelist))
-            yield event.plain_result(f"✅ 已从白名单移除群 {group_id}\n📊 当前白名单共 {len(whitelist)} 个群")
-        
-        else:
-            yield event.plain_result("❌ 未知操作！\n💡 用法：/公告白名单 add 群号\n   /公告白名单 remove 群号\n   /公告白名单 list")
+        if result['effect_result']:
+            lines.append(f"🎯 效果已触发：{result['effect_result']}")
+
+        lines.append("\n💡 使用 /塔罗牌 效果 查看详情")
+
+        yield event.plain_result("\n".join(lines))
+
+    # ============== 资产/余额查询命令（同义词）==============
+
+    @filter.command("资产")
+    async def cmd_asset(self, event: AstrMessageEvent):
+        """查看个人资产详情"""
+        await self._ensure_db()
+
+        user_id = str(event.get_sender_id())
+        total, cash, bank, stock = await self._get_user_asset(user_id)
+
+        lines = [
+            f"💎 我的资产",
+            "═══════════════════",
+            f"💰 总资产：{format_num(total)} 星声",
+            f"",
+            f"💳 现金：{format_num(cash)} 星声",
+            f"🏦 银行存款：{format_num(bank)} 星声",
+            f"📈 股票市值：{format_num(stock)} 星声",
+        ]
+
+        # 获取用户排名
+        all_users = await self.stats_service.get_all_users_assets()
+        if all_users:
+            rank = sum(1 for u in all_users if u["total"] > total) + 1
+            total_users = len(all_users)
+            percentile = (rank / total_users) * 100
+            lines.extend([
+                f"",
+                f"📊 排名：第 {rank} 名 / 共 {total_users} 人",
+                f"📈 超过 {100 - percentile:.1f}% 的用户"
+            ])
+
+        yield event.plain_result("\n".join(lines))
+
+    @filter.command("余额")
+    async def cmd_balance(self, event: AstrMessageEvent):
+        """查看个人余额（与/资产相同）"""
+        # 直接调用cmd_asset的实现
+        async for result in self.cmd_asset(event):
+            yield result

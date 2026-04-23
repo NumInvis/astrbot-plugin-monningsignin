@@ -4,6 +4,10 @@
 作者: NumInvis
 """
 
+from .main import EconomyPlugin
+
+__all__ = ["EconomyPlugin"]
+
 __version__ = "2.0.1"
 __author__ = "NumInvis"
 __plugin_name__ = "莫宁宁的币"
